@@ -1,0 +1,25 @@
+{
+  "name": "pi-durable-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal terminal coding agent built on Pi Durable.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types agent.ts",
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-coding-agent": "1.0.3",
+    "@earendil-works/pi-durable": "1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
+  }
+}
