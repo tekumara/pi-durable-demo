@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { runAudit } from "./auditor.ts";
+import { createModelRuntime } from "./model.ts";
 import { createRegistry, Harness, watchEvents } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -13,19 +14,7 @@ async function main() {
   const context = BACKGROUND_CONTEXT;
   const cwd = process.cwd();
   // Reuse Pi's credential store, OAuth refresh, and custom model configuration.
-  const models = await ModelRuntime.create();
-  const settings = SettingsManager.create(cwd);
-  const preferred = process.argv[2] ?? (
-    settings.getDefaultProvider() && settings.getDefaultModel()
-      ? `${settings.getDefaultProvider()}/${settings.getDefaultModel()}`
-      : undefined
-  );
-  const available = models.getAvailableSnapshot();
-  const model = available.find((m) => `${m.provider}/${m.id}` === preferred)
-    ?? (process.argv[2] ? undefined : available[0]);
-  if (!model) {
-    throw new Error(`No available model${preferred ? `: ${preferred}` : ""}. Log in with pi, then run npm start -- provider/model-id.`);
-  }
+  const { models, model, available } = await createModelRuntime(cwd, process.argv[2]);
 
   const directory = join(cwd, ".pi-durable");
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -67,7 +56,7 @@ async function main() {
     if (!available.some((m) => m.provider === agent.model?.provider && m.id === agent.model?.modelId)) {
       throw new Error("The saved model is unavailable. Run npm start -- provider/model-id to select another.");
     }
-    console.log(`Pi Durable · ${agent.model!.provider}/${agent.model!.modelId}\n${cwd}\n/quit to exit · Ctrl+C saves unfinished work for restart\n`);
+    console.log(`Pi Durable · ${agent.model!.provider}/${agent.model!.modelId}\n${cwd}\n/audit <PR URL> to audit · /quit to exit · Ctrl+C saves unfinished work for restart\n`);
 
     // Events contain both partial deltas and authoritative final messages.
     const printed = new Map<number, number>();
@@ -117,7 +106,15 @@ async function main() {
     for await (const line of lines) {
       const content = line.trim();
       if (content === "/quit") break;
-      if (content) {
+      if (content === "/audit" || content.startsWith("/audit ")) {
+        const url = content.slice("/audit".length).trim();
+        try {
+          if (!url) throw new Error("Usage: /audit <GitHub PR URL>");
+          await runAudit(url, { cwd, models, model: agent.model! });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : error);
+        }
+      } else if (content) {
         const settled = await (await root.submit({ type: "input", content }, context)).wait(context);
         if (settled.status === "unanswered") console.error(`No answer: ${settled.reason}`);
       }

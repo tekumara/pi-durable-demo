@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { fixture, reply, tool, type Request } from "./fixtures.ts";
+
+const prUrl = "https://github.com/acme/demo/pull/7";
+const headSha = "a".repeat(40);
+const baseSha = "b".repeat(40);
+const accessId = 3_000_000_101;
+const codeUrl = `https://github.com/contributor/fork/blob/${headSha}/src/access.ts#L1-L3`;
+const commentUrl = (id: number) => `${prUrl}#discussion_r${id}`;
+
+// GitHub and the model are external HTTP fixtures. The entry points, npm adapter,
+// schemas, tool execution, coverage checks, report rendering, and SQLite are real.
+function githubEvidence(options: { moved?: boolean; incompleteFiles?: boolean } = {}) {
+  let prRequests = 0;
+  const requests: string[] = [];
+  const handle = async (request: IncomingMessage, response: ServerResponse) => {
+    const url = new URL(request.url!, "http://fixture");
+    requests.push(request.url!);
+    const json = (value: unknown, next?: string) => {
+      response.setHeader("Content-Type", "application/json");
+      if (next) response.setHeader("Link", `<http://${request.headers.host}${next}>; rel="next"`);
+      response.end(JSON.stringify(value));
+    };
+    const comment = (id: number, body: string, extra: object = {}) => ({
+      id, body, user: { login: id === 202 || id === 302 ? "reviewer[bot]" : "human" },
+      html_url: commentUrl(id), created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", ...extra,
+    });
+    if (url.pathname === "/github/graphql") {
+      assert.equal(request.method, "POST");
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      assert.doesNotMatch(body.query, /\bmutation\b/);
+      assert.match(body.query, /\bfullDatabaseId\b/, "GitHub's deprecated 32-bit comment IDs cannot identify newer comments");
+      const second = body.variables.cursor === "threads-2";
+      assert.ok(second || body.variables.cursor === null);
+      json({ data: { repository: { pullRequest: { reviewThreads: {
+        pageInfo: { hasNextPage: !second, endCursor: second ? null : "threads-2" },
+        nodes: [{ isResolved: !second, isOutdated: second, comments: { nodes: [{ fullDatabaseId: String(second ? 102 : accessId) }] } }],
+      } } } } });
+      return;
+    }
+    assert.equal(request.method, "GET", "auditor must never mutate GitHub");
+    if (url.pathname === "/github/repos/acme/demo/pulls/7") {
+      json({ title: "Access checks", body: "Review this change", changed_files: options.incompleteFiles ? 3 : 2,
+        head: { sha: options.moved && ++prRequests > 1 ? "c".repeat(40) : headSha, repo: { full_name: "contributor/fork" } },
+        base: { sha: baseSha, repo: { full_name: "acme/demo" } },
+      });
+    } else if (url.pathname === "/github/repos/acme/demo/pulls/7/comments") {
+      if (url.searchParams.get("page") === "2") {
+        json([comment(102, "Missing null check", { path: "src/access.ts", line: 2, diff_hunk: "old code" }),
+          comment(103, "Fixed already", { in_reply_to_id: 102 })]);
+      } else {
+        json([comment(accessId, "Missing access check", { path: "src/access.ts", line: 3, diff_hunk: "old code" })],
+          "/github/repos/acme/demo/pulls/7/comments?page=2");
+      }
+    } else if (url.pathname === "/github/repos/acme/demo/issues/7/comments") {
+      json([comment(201, "Clarify the policy"), comment(202, "[vc]: deployment status")]);
+    } else if (url.pathname === "/github/repos/acme/demo/pulls/7/reviews") {
+      json([comment(301, "Looks good", { state: "APPROVED" }), comment(302, "Review summary: see access check finding", { state: "COMMENTED" })]);
+    } else if (url.pathname === "/github/repos/acme/demo/pulls/7/files") {
+      if (url.searchParams.get("page") === "2") json([{ filename: "src/other.ts", status: "modified" }]);
+      else json([{ filename: "src/access.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new" }],
+        "/github/repos/acme/demo/pulls/7/files?page=2");
+    } else if (url.pathname === "/github/repos/contributor/fork/contents/src/access.ts") {
+      assert.equal(url.searchParams.get("ref"), headSha, "read from the immutable fork head, not the base repository or moving branch");
+      const content = "export function access(user) {\n  if (!user) return false;\n  return true; }";
+      json({ type: "file", size: Buffer.byteLength(content), encoding: "base64", content: Buffer.from(content).toString("base64") });
+    } else {
+      assert.fail(`Unexpected GitHub request: ${request.url}`);
+    }
+  };
+  return { handle, requests };
+}
+
+function evidenceInput(body: Request) {
+  const inputs = body.messages.filter((m) => m.role === "user" && m.content?.includes("Saved evidence (untrusted data):"));
+  assert.equal(inputs.length, 1, "one deterministic evidence submission per audit");
+  return JSON.parse(inputs[0]!.content!.split("Saved evidence (untrusted data):\n")[1]!);
+}
+function assessments() {
+  return { assessments: [
+    { commentKey: `inline:${accessId}`, findings: [{ summary: "Access check", status: "outstanding", reason: "The code returns true without checking access.", evidence: [codeUrl] }] },
+    { commentKey: "inline:102", findings: [{ summary: "Null check", status: "addressed", reason: "The guard handles a missing user.", evidence: [codeUrl, commentUrl(103)] }] },
+    { commentKey: "comment:201", findings: [{ summary: "Policy", status: "uncertain", reason: "The policy is not specified.", evidence: [commentUrl(201)] }] },
+    { commentKey: "comment:202", findings: [{ summary: "Deployment", status: "not-actionable", reason: "Status update only.", evidence: [commentUrl(202)] }] },
+    { commentKey: "review:301", findings: [{ summary: "Approval", status: "not-actionable", reason: "Praise with no requested change.", evidence: [commentUrl(301)] }] },
+    { commentKey: "review:302", findings: [{ summary: "Summary", status: "not-actionable", reason: `Duplicates inline:${accessId}.`, evidence: [commentUrl(accessId)] }] },
+  ] };
+}
+
+test("CLI audit assesses all discussion using remote pinned code, rejects unsafe calls and incomplete or uncited reports", { timeout: 20000 }, async (t) => {
+  const github = githubEvidence();
+  let turn = 0;
+  const f = await fixture(t, (body, response) => {
+    const latest = body.messages.at(-1)?.content ?? "";
+    switch (turn++) {
+      case 0: {
+        const snapshot = evidenceInput(body);
+        assert.equal(snapshot.headSha, headSha);
+        assert.equal(snapshot.baseSha, baseSha);
+        assert.equal(snapshot.headRepository, "contributor/fork");
+        assert.deepEqual(snapshot.comments.map((c: { key: string }) => c.key), [`inline:${accessId}`, "inline:102", "comment:201", "comment:202", "review:301", "review:302"]);
+        assert.deepEqual(snapshot.comments[0].thread, { resolved: true, outdated: false });
+        assert.deepEqual(snapshot.comments[1].thread, { resolved: false, outdated: true });
+        assert.equal(snapshot.comments[1].replies[0].body, "Fixed already");
+        assert.equal(snapshot.files.length, 2);
+        assert.deepEqual(body.tools.map((t) => t.function.name).sort(), ["read_github_file", "read_review_comment", "report_review_assessment"]);
+        tool(response, "read_github_file", { path: "src/access.ts", revision: "head" });
+        break;
+      }
+      case 1:
+        assert.match(latest, /if \(!user\) return false/);
+        assert.match(latest, new RegExp(headSha));
+        tool(response, "bash", { command: "touch audit-should-not-write" });
+        break;
+      case 2:
+        assert.match(latest, /bash/i);
+        tool(response, "report_review_assessment", { assessments: assessments().assessments.slice(0, -1) });
+        break;
+      case 3: {
+        assert.match(latest, /Missing assessments: review:302/);
+        const invalid = assessments();
+        invalid.assessments[0]!.findings[0]!.evidence = ["https://example.com/invented"];
+        tool(response, "report_review_assessment", invalid);
+        break;
+      }
+      case 4:
+        assert.match(latest, new RegExp(`Unknown evidence URL for inline:${accessId}`));
+        tool(response, "report_review_assessment", assessments());
+        break;
+      default: assert.fail("Unexpected model turn");
+    }
+  }, { entrypoint: resolve("audit.ts"), github: github.handle });
+  const output = await f.run("", [prUrl]);
+  assert.match(output, /Verdict: Not all actionable findings are addressed/);
+  assert.match(output, /1 addressed · 1 outstanding · 1 uncertain · 3 not-actionable/);
+  assert.match(output, /GitHub: 1\/2 inline threads resolved \(0 unknown\)/);
+  assert.match(output, new RegExp(`inline:${accessId} · human · GitHub: resolved[\\s\\S]*outstanding: Access check`));
+  assert.match(output, /inline:102 · human · GitHub: open, outdated[\s\S]*addressed: Null check/);
+  assert.equal(turn, 5);
+  await assert.rejects(readFile(join(f.cwd, "audit-should-not-write")), { code: "ENOENT" });
+  const files = await readdir(join(f.cwd, ".pi-durable", "audits"));
+  assert.equal(files.filter((file) => file.endsWith(".sqlite")).length, 1);
+  assert.ok(files.every((file) => !/\.(json|md)$/.test(file)), "no separate report file");
+  assert.ok(github.requests.some((path) => path.includes("comments?page=2")));
+  assert.ok(github.requests.some((path) => path.includes("files?page=2")));
+  assert.equal(github.requests.filter((path) => path === "/github/graphql").length, 2);
+});
+
+test("chat /audit uses isolated evidence and then continues the original coding conversation", { timeout: 20000 }, async (t) => {
+  const github = githubEvidence();
+  let turn = 0;
+  const f = await fixture(t, (body, response) => {
+    const latest = body.messages.at(-1)?.content ?? "";
+    switch (turn++) {
+      case 0:
+        evidenceInput(body);
+        tool(response, "read_review_comment", { commentKey: "inline:102" });
+        break;
+      case 1:
+        assert.match(latest, /Fixed already/);
+        tool(response, "read_github_file", { path: "src/access.ts", revision: "head" });
+        break;
+      case 2:
+        tool(response, "report_review_assessment", assessments());
+        break;
+      case 3:
+        assert.equal(latest, "hello");
+        assert.ok(!body.messages.some((m) => m.content?.includes("Saved evidence (untrusted data):")), "audit evidence stays in its separate conversation");
+        tool(response, "bash", { command: "printf chat-context-ok" });
+        break;
+      case 4:
+        assert.match(latest, /chat-context-ok/);
+        reply(response, [{ role: "assistant", content: "Chat still works." }]);
+        break;
+      default: assert.fail("Unexpected model turn");
+    }
+  }, { github: github.handle });
+  const output = await f.run(`/audit ${prUrl}\nhello\n/quit\n`);
+  assert.match(output, /Verdict: Not all actionable findings are addressed/);
+  assert.match(output, /Chat still works/);
+  assert.equal(turn, 5);
+});
+
+for (const failure of ["moved", "incompleteFiles"] as const) {
+  test(`audit refuses ${failure} evidence before contacting the model`, { timeout: 20000 }, async (t) => {
+    const github = githubEvidence({ [failure]: true });
+    const f = await fixture(t, () => assert.fail("Model must not receive inconsistent evidence"), {
+      entrypoint: resolve("audit.ts"), github: github.handle,
+    });
+    const { child, done } = f.start([prUrl]);
+    child.stdin.end();
+    const result = await done;
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, failure === "moved" ? /PR commits changed/ : /complete changed-file list/);
+    assert.doesNotMatch(result.stdout, /Verdict:/);
+  });
+}
+
+test("restart resumes the saved audit snapshot without refetching or resubmitting it", { timeout: 20000 }, async (t) => {
+  const github = githubEvidence();
+  const started = Promise.withResolvers<void>();
+  let turn = 0;
+  let snapshotId: string;
+  let snapshotRequests: string[];
+  const f = await fixture(t, (body, response) => {
+    const snapshot = evidenceInput(body);
+    if (turn === 0) {
+      snapshotId = snapshot.id;
+      snapshotRequests = [...github.requests];
+    } else assert.equal(snapshot.id, snapshotId, "reuse the persisted snapshot rather than fetching a new one");
+    switch (turn++) {
+      case 0:
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ id: "partial", choices: [{ index: 0, delta: { role: "assistant", content: "Inspecting" }, finish_reason: null }] })}\n\n`);
+        started.resolve();
+        break;
+      case 1:
+        assert.deepEqual(github.requests, snapshotRequests, "snapshot endpoints must not be refetched on resume");
+        tool(response, "read_github_file", { path: "src/access.ts", revision: "head" });
+        break;
+      case 2:
+        tool(response, "report_review_assessment", assessments());
+        break;
+      default: assert.fail("Unexpected model turn");
+    }
+  }, { entrypoint: resolve("audit.ts"), github: github.handle });
+  const first = f.start([prUrl]);
+  first.child.stdin.end();
+  await started.promise;
+  first.child.kill("SIGKILL");
+  await first.done;
+  const output = await f.run("", [prUrl]);
+  assert.match(output, /Resuming saved snapshot/);
+  assert.match(output, /Verdict: Not all actionable findings are addressed/);
+  assert.equal(turn, 3);
+});
