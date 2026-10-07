@@ -168,6 +168,18 @@ export async function postReviewComment(target: ReviewTarget, body: string): Pro
   await client.request(`${client.base}/repos/${target.owner}/${target.repo}/issues/${target.pr}/comments`, { body });
 }
 
+export async function approveReview(snapshot: ReviewSnapshot, body: string): Promise<void> {
+  const client = github();
+  const { owner, repo, pr } = snapshot.target;
+  const path = `${client.base}/repos/${owner}/${repo}/pulls/${pr}`;
+  const latest = await client.request<PullRequest>(path);
+  if (latest.head.sha !== snapshot.headSha || latest.base.sha !== snapshot.baseSha) {
+    throw new Error("PR commits changed since the audit snapshot. No approval was submitted; run the audit again.");
+  }
+  // Pin the approval even if the head changes between the check and the write.
+  await client.request(`${path}/reviews`, { event: "APPROVE", commit_id: snapshot.headSha, body });
+}
+
 export async function readGithubFile(snapshot: ReviewSnapshot, path: string, revision: "head" | "base", offset: number, limit: number) {
   if (path.split("/").some((part) => !part || part === "." || part === "..") || path.includes("\\") || path.startsWith("/")) {
     throw new Error("Expected a repository-relative file path without traversal");

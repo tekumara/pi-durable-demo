@@ -220,8 +220,9 @@ test("chat --force bypasses a completed cache entry", { timeout: 20_000 }, async
 test("invalid audit flags are rejected before audit storage or network access in CLI and chat", { timeout: 20_000 }, async (t) => {
   const github = evidence();
   const f = await fixture(t, () => assert.fail("Invalid commands must not reach the model"), { entrypoint: audit, github: github.handler });
-  for (const args of [["--force"], ["--comment"], [url, "--froce"], [url, "--force", "--force"],
-    [url, "--comment", "--comment"], [url, "--comment=false"], [url, "local/test", "extra"]]) {
+  for (const args of [["--force"], ["--comment"], ["--approve"], [url, "--froce"], [url, "--force", "--force"],
+    [url, "--comment", "--comment"], [url, "--comment=false"], [url, "--approve", "--approve"], [url, "--approve=false"],
+    [url, "local/test", "extra"]]) {
     const { child, done } = f.start(args);
     child.stdin.end();
     const result = await done;
@@ -229,11 +230,12 @@ test("invalid audit flags are rejected before audit storage or network access in
     assert.match(result.stderr, /Usage:/);
   }
   const { child, done } = f.start([], { entrypoint: chat });
-  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment --comment\n/quit\n`);
+  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment --comment\n/audit ${url} --approve --approve\n/quit\n`);
   const result = await done;
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /--force can be supplied only once/);
   assert.match(result.stderr, /--comment can be supplied only once/);
+  assert.match(result.stderr, /--approve can be supplied only once/);
   assert.equal(github.reads(), 0);
   await assert.rejects(readdir(join(f.cwd, ".pi-durable", "audits")), { code: "ENOENT" });
 });

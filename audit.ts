@@ -8,12 +8,13 @@ async function main() {
     console.log(AUDIT_CLI_USAGE);
     console.log("--force bypasses the assessment cache and restarts any unfinished audit.");
     console.log("--comment posts the verdict to the PR after a complete assessment (default: false).");
+    console.log("--approve approves the PR only if all actionable findings appear addressed (default: false).");
     return;
   }
-  const { url, requested, force, comment } = parseAuditOptions(args, "cli");
+  const { url, requested, force, comment, approve } = parseAuditOptions(args, "cli");
   const cwd = process.cwd();
   const { models, model } = await createModelRuntime(cwd, requested);
-  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment });
+  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment, approve });
 }
 
 main().catch((error) => {

@@ -98,6 +98,32 @@ The host posts only after a complete, validated assessment, including a cache hi
 
 Posting is not replayed by Durable, and the flag does not persist across invocations. If posting fails, the CLI exits 1 but retains the completed assessment. After an interruption or ambiguous network failure, check the PR before retrying to avoid duplicate comments.
 
+### Approve when findings are addressed
+
+Add `--approve` to submit a GitHub approval review only when the verdict is "All actionable findings appear addressed":
+
+```sh
+npm run audit -- --approve https://github.com/owner/repo/pull/42
+```
+
+```text
+/audit --approve https://github.com/owner/repo/pull/42
+```
+
+The flag defaults to false. Approval requires at least one `addressed` finding and no `outstanding` or `uncertain` findings. Audits with only `not-actionable` findings, or no findings, skip approval. A skipped approval is not an operational failure.
+
+The host submits the approval after a complete, validated assessment, including a cache hit. It rechecks the PR's head and base SHAs before approving and stops if either differs from the saved snapshot. The review is pinned to the audited head SHA and includes the same summary as a verdict comment. Approval assesses the supplied review findings, not the PR's overall correctness or CI status.
+
+`--approve` does not imply `--comment`. You can enable either or both, and combine them with `--force`:
+
+```sh
+npm run audit -- --comment --approve https://github.com/owner/repo/pull/42
+```
+
+With both flags, the host posts the comment first, then submits the approval if the verdict allows it. Your GitHub token needs permission to submit PR reviews. GitHub does not allow authors to approve their own PRs.
+
+Approvals are not replayed by Durable, and the flag does not persist across invocations. Approval errors exit 1 but retain the completed assessment. A comment already posted by `--comment` remains if approval fails. Check the PR before retrying after an interruption or ambiguous network failure.
+
 ### Assessment caching and restart
 
 A normal invocation follows this flow:
@@ -185,7 +211,7 @@ npm run check
 npm test
 ```
 
-The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
+The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 
