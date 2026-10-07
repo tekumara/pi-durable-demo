@@ -62,7 +62,7 @@ No separate JSON or Markdown report file is written. Each PR has a SQLite sessio
 
 ### Post a verdict comment
 
-Add `--comment` to post the verdict, finding counts, audited head SHA and evidence fetch window as a general PR comment:
+Add `--comment` to post the verdict, finding counts, audited head SHA and evidence fetch window as a general PR comment. It also explains each outstanding or uncertain finding, with links to the original comment and supporting evidence:
 
 ```sh
 npm run audit -- --comment https://github.com/owner/repo/pull/42
@@ -87,10 +87,30 @@ Findings: 4 addressed · 1 outstanding · 1 uncertain · 2 not-actionable
 
 GitHub: 3/5 inline threads resolved (0 unknown). PR-level comments and review summaries have no thread-resolution state.
 
+## Outstanding or uncertain findings
+
+### outstanding: Missing access check
+
+The current code still grants access without checking the user's role.
+
+Review comment: https://github.com/owner/repo/pull/42#discussion_r101
+
+Evidence:
+- https://github.com/owner/repo/blob/0123456789abcdef0123456789abcdef01234567/src/access.ts#L1-L3
+
+### uncertain: Undefined access policy
+
+The discussion does not specify which roles should have access, so the intended behaviour cannot be verified.
+
+Review comment: https://github.com/owner/repo/pull/42#issuecomment-202
+
+Evidence:
+- https://github.com/owner/repo/pull/42#issuecomment-202
+
 This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.
 ```
 
-The comment contains the summary only. Per-finding explanations and evidence links remain in the terminal report.
+The comment includes details only for `outstanding` and `uncertain` findings. If there are none, it contains the summary only. The terminal report retains explanations and evidence for all findings.
 
 The flag defaults to false. It can appear before or after the URL or CLI model argument, and you can combine it with `--force`. Your GitHub token needs permission to create PR comments.
 

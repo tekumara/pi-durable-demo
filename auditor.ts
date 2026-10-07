@@ -193,6 +193,11 @@ function formatSummary(snapshot: ReviewSnapshot, assessments: Assessment[]): str
   ];
 }
 
+function stripControlCharacters(text: string): string {
+  // Never emit terminal control sequences copied from remote content.
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
 function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): string {
   const lines = [...formatSummary(snapshot, assessments), ""];
   const byKey = new Map(assessments.map((a) => [a.commentKey, a]));
@@ -206,15 +211,33 @@ function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): stri
     lines.push("");
   }
   lines.push(snapshotDisclaimer);
-  // Never emit terminal control sequences copied from remote content.
-  return lines.join("\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+  return stripControlCharacters(lines.join("\n"));
+}
+
+function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): string {
+  const sections = formatSummary(snapshot, assessments);
+  const byKey = new Map(assessments.map((a) => [a.commentKey, a]));
+  const details: string[] = [];
+  for (const comment of snapshot.comments) {
+    for (const finding of byKey.get(comment.key)!.findings) {
+      if (finding.status !== "outstanding" && finding.status !== "uncertain") continue;
+      details.push([
+        `### ${finding.status}: ${finding.summary}`, finding.reason,
+        `Review comment: ${comment.url}`,
+        `Evidence:\n${finding.evidence.map((url) => `- ${url}`).join("\n")}`,
+      ].join("\n\n"));
+    }
+  }
+  if (details.length) sections.push("## Outstanding or uncertain findings", ...details);
+  sections.push(snapshotDisclaimer);
+  return stripControlCharacters(sections.join("\n\n"));
 }
 
 async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: {
   comment?: boolean; approve?: boolean; dryRun?: boolean;
 }): Promise<void> {
   console.log(`\n${formatReport(snapshot, assessments)}\n`);
-  const body = [...formatSummary(snapshot, assessments), snapshotDisclaimer].join("\n\n");
+  const body = formatComment(snapshot, assessments);
   if (options.dryRun) {
     console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
     console.log(options.comment ? "[audit:dry-run] Comment would be posted."
@@ -285,6 +308,7 @@ export async function runAudit(url: string, options: {
       const policy = policyFingerprint(options.models, model);
       console.log(`[audit] Fetching ${target.url}`);
       snapshot = await fetchReviewSnapshot(target);
+      console.log(`[audit] PR title: ${stripControlCharacters(snapshot.title)}`);
       const fingerprint = evidenceFingerprint(snapshot, policy);
       const cached = !state?.restartModel && state?.latestSuccess;
       if (cached && cached.fingerprint === fingerprint) {

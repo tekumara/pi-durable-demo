@@ -137,6 +137,7 @@ test("CLI audit assesses all discussion using remote pinned code, rejects unsafe
     }
   }, { entrypoint: resolve("audit.ts"), github: github.handle });
   const output = await f.run("", [prUrl]);
+  assert.match(output, /\[audit\] PR title: Access checks/);
   assert.match(output, /Verdict: Not all actionable findings are addressed/);
   assert.match(output, /1 addressed · 1 outstanding · 1 uncertain · 3 not-actionable/);
   assert.match(output, /GitHub: 1\/2 inline threads resolved \(0 unknown\)/);

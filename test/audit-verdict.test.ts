@@ -20,7 +20,7 @@ function assess(response: ServerResponse, statuses: Status[] = ["addressed"]) {
   })) }] : [] });
 }
 
-function githubEvidence(options: { commentStatus?: number; approvalStatus?: number; empty?: boolean } = {}) {
+function githubEvidence(options: { commentStatus?: number; approvalStatus?: number; empty?: boolean; issueComment?: boolean } = {}) {
   const comments: string[] = [];
   const approvals: { body: string; event: string; commit_id: string }[] = [];
   const state = { headSha: sha, baseSha: sha };
@@ -60,8 +60,10 @@ function githubEvidence(options: { commentStatus?: number; approvalStatus?: numb
     } else if (path.endsWith("/pulls/8/comments")) {
       json(options.empty ? [] : [{ id: 1, body: "Why is this intentional?", html_url: evidenceUrl, user: { login: "human" }, created_at: "2026-01-01" },
         { id: 2, in_reply_to_id: 1, body: "This preserves the documented compatibility contract.", html_url: `${url}#discussion_r2`, user: { login: "author" }, created_at: "2026-01-02" }]);
+    } else if (path.endsWith("/issues/8/comments")) {
+      json(options.issueComment ? [{ id: 3, body: "Which roles should have access?", html_url: `${url}#issuecomment-3`, user: { login: "human" } }] : []);
     } else {
-      assert.ok(path.endsWith("/issues/8/comments") || path.endsWith("/pulls/8/reviews") || path.endsWith("/pulls/8/files"));
+      assert.ok(path.endsWith("/pulls/8/reviews") || path.endsWith("/pulls/8/files"));
       json([]);
     }
   };
@@ -105,6 +107,7 @@ for (const status of ["addressed", "uncertain"] as const) {
       assert.equal(github.approvals[0].event, "APPROVE");
       assert.equal(github.approvals[0].commit_id, sha);
       assert.match(github.approvals[0].body, verdict);
+      assert.doesNotMatch(github.comments[0], /Outstanding or uncertain findings|The reply explains the intentional behaviour/);
       assert.match(posted, /PR approved/);
     } else {
       assert.doesNotMatch(posted, /Reusing saved assessment/);
@@ -114,6 +117,36 @@ for (const status of ["addressed", "uncertain"] as const) {
     }
   });
 }
+
+test("verdict comments explain every outstanding or uncertain finding with its source and evidence, omitting other finding details", { timeout: 20000 }, async (t) => {
+  const github = githubEvidence({ issueComment: true });
+  const issueUrl = `${url}#issuecomment-3`;
+  const f = await fixture(t, (_body, response) => {
+    tool(response, "report_review_assessment", { assessments: [
+      { commentKey: "inline:1", findings: [
+        { summary: "Missing access check", status: "outstanding",
+          reason: "The current code still grants access without checking roles.\u001b", evidence: [evidenceUrl, `${url}#discussion_r2`] },
+        { summary: "Null guard", status: "addressed", reason: "The null guard is already fixed.", evidence: [evidenceUrl] },
+        { summary: "Duplicate request", status: "not-actionable", reason: "This repeats the access check finding.", evidence: [evidenceUrl] },
+      ] },
+      { commentKey: "comment:3", findings: [
+        { summary: "Undefined access policy", status: "uncertain",
+          reason: "The discussion does not specify which roles should have access.", evidence: [issueUrl] },
+        { summary: "Missing policy documentation", status: "outstanding",
+          reason: "The requested policy documentation is still absent.", evidence: [issueUrl] },
+      ] },
+    ] });
+  }, { entrypoint: resolve("audit.ts"), github: github.handler });
+  await f.run("", ["--comment", url]);
+  assert.equal(github.comments.length, 1);
+  const body = github.comments[0];
+  assert.match(body, /1 addressed · 2 outstanding · 1 uncertain · 1 not-actionable/);
+  assert.match(body, /outstanding: Missing access check\n\nThe current code still grants access without checking roles\.\n\nReview comment: https:\/\/github\.com\/acme\/demo\/pull\/8#discussion_r1/);
+  assert.ok(body.includes(`${url}#discussion_r2`), "all evidence links must be included, not just the original comment");
+  assert.match(body, /uncertain: Undefined access policy\n\nThe discussion does not specify which roles should have access\.\n\nReview comment: https:\/\/github\.com\/acme\/demo\/pull\/8#issuecomment-3/);
+  assert.match(body, /outstanding: Missing policy documentation\n\nThe requested policy documentation is still absent/);
+  assert.doesNotMatch(body, /Null guard|already fixed|Duplicate request|repeats the access check|\u001b/);
+});
 
 test("an unstructured final answer cannot bypass complete report validation, post a verdict or approve", { timeout: 20000 }, async (t) => {
   const github = githubEvidence();
