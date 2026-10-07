@@ -163,6 +163,11 @@ export async function fetchReviewSnapshot(target: ReviewTarget): Promise<ReviewS
   };
 }
 
+export async function postReviewComment(target: ReviewTarget, body: string): Promise<void> {
+  const client = github();
+  await client.request(`${client.base}/repos/${target.owner}/${target.repo}/issues/${target.pr}/comments`, { body });
+}
+
 export async function readGithubFile(snapshot: ReviewSnapshot, path: string, revision: "head" | "base", offset: number, limit: number) {
   if (path.split("/").some((part) => !part || part === "." || part === "..") || path.includes("\\") || path.startsWith("/")) {
     throw new Error("Expected a repository-relative file path without traversal");

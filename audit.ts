@@ -7,12 +7,13 @@ async function main() {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(AUDIT_CLI_USAGE);
     console.log("--force bypasses the assessment cache and restarts any unfinished audit.");
+    console.log("--comment posts the verdict to the PR after a complete assessment (default: false).");
     return;
   }
-  const { url, requested, force } = parseAuditOptions(args, "cli");
+  const { url, requested, force, comment } = parseAuditOptions(args, "cli");
   const cwd = process.cwd();
   const { models, model } = await createModelRuntime(cwd, requested);
-  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force });
+  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment });
 }
 
 main().catch((error) => {

@@ -9,7 +9,7 @@ import {
   type Conversation, type ConversationId, type ModelRef,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { fetchReviewSnapshot, parseReviewTarget, readGithubFile, type ReviewSnapshot } from "./reviews.ts";
+import { fetchReviewSnapshot, parseReviewTarget, postReviewComment, readGithubFile, type ReviewSnapshot } from "./reviews.ts";
 
 const Finding = Type.Object({
   summary: Type.String({ minLength: 1 }),
@@ -170,7 +170,9 @@ function evidenceFingerprint(snapshot: ReviewSnapshot, policy: string): string {
   } });
 }
 
-function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): string {
+const snapshotDisclaimer = "This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.";
+
+function formatSummary(snapshot: ReviewSnapshot, assessments: Assessment[]): string[] {
   const findings = assessments.flatMap((a) => a.findings);
   const counts = Object.fromEntries(["addressed", "outstanding", "uncertain", "not-actionable"].map((status) => [status, findings.filter((f) => f.status === status).length]));
   const inline = snapshot.comments.filter((c) => c.kind === "inline");
@@ -178,11 +180,15 @@ function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): stri
   const unknown = inline.filter((c) => !c.thread).length;
   const verdict = counts.outstanding || counts.uncertain ? "Not all actionable findings are addressed."
     : counts.addressed ? "All actionable findings appear addressed." : "No actionable findings identified.";
-  const lines = [
+  return [
     `PR review audit · ${snapshot.target.url}`, `Head: ${snapshot.headSha}`, `Evidence fetched: ${snapshot.startedAt} to ${snapshot.fetchedAt}`,
     `Verdict: ${verdict}`, `Findings: ${counts.addressed} addressed · ${counts.outstanding} outstanding · ${counts.uncertain} uncertain · ${counts["not-actionable"]} not-actionable`,
-    `GitHub: ${resolved}/${inline.length} inline threads resolved (${unknown} unknown). PR-level comments and review summaries have no thread-resolution state.`, "",
+    `GitHub: ${resolved}/${inline.length} inline threads resolved (${unknown} unknown). PR-level comments and review summaries have no thread-resolution state.`,
   ];
+}
+
+function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): string {
+  const lines = [...formatSummary(snapshot, assessments), ""];
   const byKey = new Map(assessments.map((a) => [a.commentKey, a]));
   for (const comment of snapshot.comments) {
     const thread = comment.kind !== "inline" ? "not a review thread" : !comment.thread ? "resolution unknown"
@@ -193,12 +199,21 @@ function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): stri
     }
     lines.push("");
   }
-  lines.push("This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.");
+  lines.push(snapshotDisclaimer);
   // Never emit terminal control sequences copied from remote content.
   return lines.join("\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 }
 
-export async function runAudit(url: string, options: { cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean }): Promise<void> {
+async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], comment = false): Promise<void> {
+  console.log(`\n${formatReport(snapshot, assessments)}\n`);
+  if (comment) {
+    // Host-only side effect: never expose posting to the model or replay it through Durable.
+    await postReviewComment(snapshot.target, [...formatSummary(snapshot, assessments), snapshotDisclaimer].join("\n\n"));
+    console.log("[audit] Verdict comment posted to the PR");
+  }
+}
+
+export async function runAudit(url: string, options: { cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);
   const key = createHash("sha256").update(`${new URL(target.url).origin}/${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.pr}`).digest("hex").slice(0, 20);
@@ -258,7 +273,7 @@ export async function runAudit(url: string, options: { cwd: string; models: Mode
             } });
           }, context);
           console.log(`[audit] Reusing saved assessment from ${cached.assessedAt}; evidence rechecked ${snapshot.fetchedAt} (unchanged)`);
-          console.log(`\n${formatReport(saved.snapshot, saved.report)}\n`);
+          await outputReport(saved.snapshot, saved.report, options.comment);
           return;
         }
       }
@@ -311,7 +326,7 @@ export async function runAudit(url: string, options: { cwd: string; models: Mode
     }, context);
     if (settled.status === "unanswered") throw new Error(`Audit failed: ${settled.reason}`);
     if (!saved?.report) throw new Error("Agent finished without a complete assessment. No verdict was produced; run the audit again.");
-    console.log(`\n${formatReport(snapshot, saved.report)}\n`);
+    await outputReport(snapshot, saved.report, options.comment);
   } catch (error) {
     if (!closing) throw error;
     console.log("\nAudit interrupted. Run the same audit again to recover its saved work.");

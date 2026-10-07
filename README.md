@@ -30,7 +30,7 @@ node --experimental-strip-types /path/to/pi-durable-demo/agent.ts
 
 ## Audit a pull request
 
-Run a one-shot, read-only audit:
+Run a one-shot audit (read-only by default):
 
 ```sh
 npm run audit -- https://github.com/owner/repo/pull/42
@@ -59,6 +59,44 @@ The model can read remote text files at those pinned commits, including the fork
 The terminal report lists each comment and its findings as `addressed`, `outstanding`, `uncertain`, or `not-actionable`, with explanations and evidence links. GitHub thread resolution is reported separately. A resolved thread or a reply claiming a fix is not proof that the code addresses the finding. The host checks comment coverage and evidence references before printing a verdict. Assessment of the findings remains the model's judgement.
 
 No separate JSON or Markdown report file is written. Each PR has a SQLite session under `.pi-durable/audits/`. The evidence is saved both in a Durable document and as a submitted conversation input; remote file reads become tool results. The structured assessment is also retained in the session. Private review text and code are sent to your selected model provider and saved locally, so protect this directory.
+
+### Post a verdict comment
+
+Add `--comment` to post the verdict, finding counts, audited head SHA and evidence fetch window as a general PR comment:
+
+```sh
+npm run audit -- --comment https://github.com/owner/repo/pull/42
+```
+
+```text
+/audit --comment https://github.com/owner/repo/pull/42
+```
+
+Example comment:
+
+```text
+PR review audit · https://github.com/owner/repo/pull/42
+
+Head: 0123456789abcdef0123456789abcdef01234567
+
+Evidence fetched: 2026-06-01T12:00:00.000Z to 2026-06-01T12:00:03.000Z
+
+Verdict: Not all actionable findings are addressed.
+
+Findings: 4 addressed · 1 outstanding · 1 uncertain · 2 not-actionable
+
+GitHub: 3/5 inline threads resolved (0 unknown). PR-level comments and review summaries have no thread-resolution state.
+
+This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.
+```
+
+The comment contains the summary only. Per-finding explanations and evidence links remain in the terminal report.
+
+The flag defaults to false. It can appear before or after the URL or CLI model argument, and you can combine it with `--force`. Your GitHub token needs permission to create PR comments.
+
+The host posts only after a complete, validated assessment, including a cache hit. The model remains read-only. Each successful invocation with `--comment` creates a new comment; posting changes the PR discussion and therefore invalidates the evidence cache on the next audit.
+
+Posting is not replayed by Durable, and the flag does not persist across invocations. If posting fails, the CLI exits 1 but retains the completed assessment. After an interruption or ambiguous network failure, check the PR before retrying to avoid duplicate comments.
 
 ### Assessment caching and restart
 
@@ -206,7 +244,7 @@ npm run check
 npm test
 ```
 
-The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
+The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 
