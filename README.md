@@ -158,66 +158,7 @@ Run only one audit per PR per directory at a time; Durable does not lock storage
 
 The one-shot CLI exits 0 when it produces a complete report, even if findings remain outstanding. Operational failures or an incomplete assessment exit 1. The report is not a CI pass/fail signal.
 
-### Audit database contents
-
-Each PR has one database at `.pi-durable/audits/<target-hash>.sqlite`, shared by the CLI and chat command. It can contain several audit conversations. The coding conversation remains separate in `.pi-durable/agent.sqlite`.
-
-Each newly admitted audit attempt creates an independent conversation. Its evidence and identity are saved together, before submitting work to the model.
-
-The application stores these logical documents, not separate tables for each kind:
-
-| Document kind | Scope | Contents |
-| --- | --- | --- |
-| `app.review-audit` | Conversation | `snapshot`: PR details, pinned commits, comments, replies, thread states, changed files and patches. `report`: accepted assessments, initially `null`. `inspected`: URLs of remote file ranges read by tools. |
-| `app.review-audit-identity` | Conversation | `fingerprint`: evidence and policy hash. `policy`: model and auditor configuration hash. Older conversations may not have this document. |
-| `app.review-audit-runs` | Session | `active`: latest admitted conversation ID. `complete`: whether that attempt has settled, including failure or cancellation. `restartModel`: saved force-restart intent, otherwise `null`. `latestSuccess`: eligible cached conversation ID, fingerprint, publication time (`assessedAt`) and last evidence-check time (`lastCheckedAt`), otherwise `null`. |
-
-Each assessment in `report` has a `commentKey` and a `findings` array. Each finding contains `summary`, `status`, `reason` and `evidence` URLs. The overall verdict and counts are calculated when printing; they are not additional report fields.
-
-Once the input is placed, the conversation transcript also contains the full snapshot as a user message. Committed model responses and tool results follow it. Remote file excerpts appear in file-tool results; this is not a local PR checkout. Accepted assessment arguments appear in the assistant's `report_review_assessment` call. That tool's result is an acknowledgement, while the accepted assessment is mirrored in `app.review-audit.report`. Rejected report proposals can also appear in the transcript.
-
-Expect these changes across invocations:
-
-| Event | Database effect |
-| --- | --- |
-| New audit after a cache miss | New conversation, evidence snapshot and identity; then submission, model and tool records, and an accepted report if successful. Older conversations remain stored. |
-| Resume an unfinished audit | Same conversation and snapshot. The stable `review-audit:<snapshot.id>` request ID avoids a duplicate submission. Recovery updates task state and can add further model and tool entries. |
-| Reuse an unchanged assessment | No new conversation, submission or assessment. Append an `app.review-audit-recheck` entry to the cached conversation and update `lastCheckedAt`. The receipt records the fingerprint, new check's snapshot ID and fetch window, not another full snapshot. Original evidence and report remain unchanged. |
-| Force a restart | Save restart intent, cancel unfinished work if present, then create a new conversation when fresh evidence is admitted. Keep the cancelled conversation's existing evidence and transcript. |
-| Failed attempt | Keep any admitted conversation and its partial history. The report may remain `null`; the previous successful cache is not replaced. |
-
-A report can be saved before its submission finishes. Its presence alone does not establish a successful audit. Before the initial evidence is admitted, an interrupted fetch leaves no new conversation or snapshot, although a force-restart intent may already be saved.
-
-In SQLite, `conversations` identifies attempts, `entries` holds transcript and recheck records, `submissions` holds request IDs and status, and `tasks` holds execution state. Tool memos support recovery while a task is live; they are removed when its outcome is decided. `documents` identifies application and built-in `pi.*` documents. Their JSON values are stored in `document_revisions` as bases or deltas. Use Durable's snapshot API to read a materialised value rather than treating the latest delta as the whole document.
-
-For read-only inspection with Node's built-in SQLite, replace `<target-hash>` with the hash in the database filename:
-
-```sh
-DB=".pi-durable/audits/<target-hash>.sqlite" node --input-type=module <<'JS'
-import { DatabaseSync } from 'node:sqlite';
-const db = new DatabaseSync(process.env.DB, { readOnly: true });
-try {
-  const queries = [
-    `SELECT id FROM conversations ORDER BY id`,
-    `SELECT id, conversation_id, status,
-            json_extract(record, '$.requestId') AS request_id
-     FROM submissions ORDER BY id`,
-    `SELECT id, json_extract(record, '$.kind') AS kind, scope_kind, owner_id
-     FROM documents WHERE retired_at IS NULL ORDER BY id`,
-    `SELECT id, conversation_id, json_extract(record, '$.kind') AS kind
-     FROM entries ORDER BY id`,
-  ];
-  for (const query of queries) {
-    console.log(query);
-    console.table(db.prepare(query).all());
-  }
-} finally {
-  db.close();
-}
-JS
-```
-
-Conversation IDs are numeric database identities, not PR numbers. These application documents retain their latest value per scope; they are not a complete history of every document edit. Separate older audit conversations still retain their snapshots and reports.
+See [Audit database contents](DATABASE.md#audit-database-contents) for the saved evidence, reports, execution state and read-only inspection commands.
 
 ## Credentials and tools
 
