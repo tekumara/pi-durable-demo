@@ -1,50 +1,31 @@
-# Minimal Pi Durable coding agent
+# Pi Durable PR auditor
 
-A plain terminal chat in [`agent.ts`](agent.ts). It uses Pi Durable for the conversation, tool calls, SQLite persistence, and recovery. There is no full-screen TUI, server, or subagent system.
+Check whether human and bot review findings on a GitHub pull request have been addressed in the code. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
 
-## Run
+Audits are read-only by default and need no local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. You can opt in to posting a verdict comment or approving a PR when all actionable findings appear addressed.
+
+For ongoing coding tasks, an [optional interactive chat](#optional-interactive-chat) is also available.
+
+## Quick start
 
 You need Node.js 22.19 or newer and an existing Pi login. If needed, run `pi` and use `/login` first.
 
+Authenticate with `gh auth login`, `GITHUB_TOKEN`, or `GH_TOKEN`. Your GitHub token needs read access to the target PR and its code, including a fork's head repository.
+
 ```sh
 npm install --ignore-scripts
-npm start
-```
-
-The agent uses your saved Pi default model, or the first available model if there is no usable default. The selected model is shown at startup. Choose a specific model with:
-
-```sh
-npm start -- provider/model-id
-```
-
-For example, use a provider and model listed by Pi's `/model` command. A model argument also changes the model of an existing conversation.
-
-Type a task at `you>`. Answers stream as plain text. Tool calls show their name and file path or command. Enter `/quit` to exit.
-
-To work on another project, run the script from that directory:
-
-```sh
-cd /path/to/project
-node --experimental-strip-types /path/to/pi-durable-demo/agent.ts
-```
-
-## Audit a pull request
-
-Run a one-shot audit (read-only by default):
-
-```sh
 npm run audit -- https://github.com/owner/repo/pull/42
 ```
 
-Or type this in the chat agent:
+The auditor uses your saved Pi default model, or the first available model if there is no usable default. Choose a specific model by adding `provider/model-id` after the URL:
 
-```text
-/audit https://github.com/owner/repo/pull/42
+```sh
+npm run audit -- https://github.com/owner/repo/pull/42 provider/model-id
 ```
 
-The CLI accepts an optional `provider/model-id` after the URL. Chat audits use the chat agent's model. Both entry points call the same auditor. You do not need a local checkout of the PR.
+Use a provider and model listed by Pi's `/model` command. The one-shot CLI is in [`audit.ts`](audit.ts).
 
-Authenticate with `gh auth login`, `GITHUB_TOKEN`, or `GH_TOKEN`. The token needs read access to the target PR and its code, including a fork's head repository. `agent-reviews` 1.1.0 is a pinned npm dependency, imported directly; its CLI is not launched. Its authentication and proxy helpers may invoke `gh` or `curl`. `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` support enterprise and API-compatible endpoints.
+## How the audit works
 
 The controller fetches evidence before asking the model to assess it:
 
@@ -58,7 +39,9 @@ The model can read remote text files at those pinned commits, including the fork
 
 The terminal report lists each comment and its findings as `addressed`, `outstanding`, `uncertain`, or `not-actionable`, with explanations and evidence links. GitHub thread resolution is reported separately. A resolved thread or a reply claiming a fix is not proof that the code addresses the finding. The host checks comment coverage and evidence references before printing a verdict. Assessment of the findings remains the model's judgement.
 
-No separate JSON or Markdown report file is written. Each PR has a SQLite session under `.pi-durable/audits/`. The evidence is saved both in a Durable document and as a submitted conversation input; remote file reads become tool results. The structured assessment is also retained in the session. Private review text and code are sent to your selected model provider and saved locally, so protect this directory.
+The audit checks whether existing review findings have been addressed. It is not a general code review or proof that the PR is correct.
+
+## Optional GitHub comments and approvals
 
 ### Post a verdict comment
 
@@ -66,10 +49,6 @@ Add `--comment` to post the verdict, finding counts, audited head SHA and eviden
 
 ```sh
 npm run audit -- --comment https://github.com/owner/repo/pull/42
-```
-
-```text
-/audit --comment https://github.com/owner/repo/pull/42
 ```
 
 Example comment:
@@ -126,10 +105,6 @@ Add `--approve` to submit a GitHub approval review only when the verdict is "All
 npm run audit -- --approve https://github.com/owner/repo/pull/42
 ```
 
-```text
-/audit --approve https://github.com/owner/repo/pull/42
-```
-
 The flag defaults to false. Approval requires at least one `addressed` finding and no `outstanding` or `uncertain` findings. Audits with only `not-actionable` findings, or no findings, skip approval. A skipped approval is not an operational failure.
 
 The host submits the approval after a complete, validated assessment, including a cache hit. It rechecks the PR's head and base SHAs before approving and stops if either differs from the saved snapshot. The review is pinned to the audited head SHA and includes the same summary as a verdict comment. Approval assesses the supplied review findings, not the PR's overall correctness or CI status.
@@ -152,10 +127,6 @@ Add `--dry-run` to show the exact comment body without writing to GitHub. Combin
 npm run audit -- --dry-run --comment --approve https://github.com/owner/repo/pull/42
 ```
 
-```text
-/audit --dry-run --comment --approve https://github.com/owner/repo/pull/42
-```
-
 The normal report is followed by a labelled comment preview and the planned actions. For an addressed verdict, the action preview looks like this:
 
 ```text
@@ -169,7 +140,7 @@ The flag defaults to false and does not imply `--comment` or `--approve`. `--dry
 
 The audit otherwise runs normally: it fetches evidence, may call the model, saves its assessment and uses the cache. You can combine `--dry-run` with `--force` to reassess fresh evidence. The flag does not persist across invocations.
 
-### Assessment caching and restart
+## Assessment caching and restart
 
 A normal invocation follows this flow:
 
@@ -213,10 +184,6 @@ To request a new assessment, use `--force`:
 npm run audit -- --force https://github.com/owner/repo/pull/42
 ```
 
-```text
-/audit --force https://github.com/owner/repo/pull/42
-```
-
 The flag can appear before or after the URL or CLI model argument. It bypasses the cache. If an audit is unfinished, it cancels that attempt and starts again with fresh evidence. The controller saves its restart intent and selected model before cancelling or fetching. Once saved, they survive interruption before the new snapshot is admitted. Once that snapshot is saved, a normal invocation resumes the new attempt. Repeating `--force` deliberately restarts again.
 
 Use `--force` after a temporary evidence-access failure, when revisiting a time-sensitive finding, or when a model alias changes behind its ID.
@@ -225,38 +192,79 @@ Cache pointers, fingerprints and recheck receipts live in Durable storage. Compl
 
 Existing sessions migrate without deleting their history. Assessments created before caching are not automatically eligible for reuse. If an unfinished audit resumes under a changed assessment policy, it can finish but cannot publish a mixed-policy cache entry. A successful but uncacheable assessment clears the cache slot rather than falling back to an older success. When changing tool behaviour, validation rules or dependency defaults, bump `AUDITOR_VERSION` in `auditor.ts`. Prompt and tool-schema changes invalidate the cache automatically.
 
-Run only one audit per PR per directory at a time; Durable does not lock storage across processes. Chat audits use separate storage and do not replace the coding conversation or its tools.
+Run only one audit per PR per directory at a time; Durable does not lock storage across processes.
 
 The one-shot CLI exits 0 when it produces a complete report, even if findings remain outstanding. Operational failures or an incomplete assessment exit 1. The report is not a CI pass/fail signal.
 
+## Credentials and audit storage
+
+The auditor reuses Pi's `ModelRuntime` for credentials, OAuth refresh, and custom models. It reads the normal `~/.pi/agent` directory, or the directory set by `PI_CODING_AGENT_DIR`. It does not copy tokens into this repo. Pi extensions, skills, MCP servers, and its full system prompt are not loaded.
+
+`agent-reviews` 1.1.0 is a pinned npm dependency, imported directly; its CLI is not launched. Its authentication and proxy helpers may invoke `gh` or `curl`. `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` support enterprise and API-compatible endpoints.
+
+No separate JSON or Markdown report file is written. Each PR has a SQLite session under `.pi-durable/audits/`. The evidence is saved both in a Durable document and as a submitted conversation input; remote file reads become tool results. The structured assessment is also retained in the session.
+
+Private review text and code are sent to your selected model provider and saved locally. Protect `.pi-durable/` and keep it out of version control. SQLite's defaults protect against process crashes, but the newest commits can be lost on power failure.
+
 See [Audit database contents](DATABASE.md#audit-database-contents) for the saved evidence, reports, execution state and read-only inspection commands.
 
-## Credentials and tools
+## Optional interactive chat
 
-The agent reuses Pi's `ModelRuntime` for credentials, OAuth refresh, and custom models. It reads the normal `~/.pi/agent` directory, or the directory set by `PI_CODING_AGENT_DIR`. It does not copy tokens into this repo.
+The repository also includes a plain terminal coding chat in [`agent.ts`](agent.ts). It uses Pi Durable for conversation history, tool calls and recovery. There is no full-screen TUI, server, or subagent system.
 
-The normal chat installs Pi Durable's built-in `read`, `write`, `edit`, and `bash` tools. They run directly on your machine as your user, with no sandbox or approval prompts. Use this only with projects and tasks you trust. The separate auditor has only remote-read and reporting tools.
+After installing dependencies and logging in to Pi, start it with:
 
-Pi extensions, skills, MCP servers, and its full system prompt are not loaded. A short coding instruction tells the model to inspect the project and follow `AGENTS.md` when present.
+```sh
+npm start
+```
 
-## Persistence and recovery
+The chat uses your saved Pi default model, or the first available model if there is no usable default. The selected model is shown at startup. Choose a specific model with:
+
+```sh
+npm start -- provider/model-id
+```
+
+A model argument also changes the model of an existing conversation. Type a task at `you>`. Answers stream as plain text. Tool calls show their name and file path or command. Enter `/quit` to exit.
+
+You can invoke the same PR auditor from chat:
+
+```text
+/audit https://github.com/owner/repo/pull/42
+```
+
+The command supports the same `--force`, `--comment`, `--approve`, and `--dry-run` flags described above. Chat audits use the chat's model and separate audit storage. They do not replace the coding conversation or its tools.
+
+To use the coding chat in another project, run the script from that directory:
+
+```sh
+cd /path/to/project
+node --experimental-strip-types /path/to/pi-durable-demo/agent.ts
+```
+
+### Chat tools and safety
+
+Unlike the read-only auditor, the chat installs Pi Durable's built-in `read`, `write`, `edit`, and `bash` tools. They run directly on your machine as your user, with no sandbox or approval prompts. Use the chat only with projects and tasks you trust.
+
+The chat uses the same Pi credential setup as the auditor. Pi extensions, skills, MCP servers, and its full system prompt are not loaded. A short coding instruction tells the model to inspect the project and follow `AGENTS.md` when present.
+
+### Chat persistence and recovery
 
 The coding chat has one conversation per working directory in `.pi-durable/agent.sqlite`. Restart the same command to continue it. Conversation history and the selected model survive restarts.
 
 Ctrl+C or SIGTERM closes the harness without cancelling its unfinished work. On the next launch, `harness.resume()` continues it before accepting another task. An interrupted model request is retried. Interrupted tools rerun only when Pi Durable declares them replay-safe; writes and shell commands are not blindly repeated.
 
-Run only one agent process per working directory. Pi Durable does not provide cross-process storage locking. SQLite's defaults protect against process crashes, but the newest commits can be lost on power failure.
+Run only one chat process per working directory. Pi Durable does not provide cross-process storage locking.
 
-To start a fresh conversation, stop the agent and move or delete `.pi-durable/`. The database contains your prompts, model responses, and tool results, so keep it private and out of version control.
+To start a fresh conversation, stop the chat and move or delete `.pi-durable/agent.sqlite` and its SQLite sidecar files. Keep `.pi-durable/audits/` if you want to retain saved audits. The chat database contains your prompts, model responses, and tool results, so keep it private.
 
-## Check
+## Development checks
 
 ```sh
 npm run check
 npm test
 ```
 
-The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
+The tests use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 
