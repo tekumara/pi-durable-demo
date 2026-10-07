@@ -210,26 +210,35 @@ function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): stri
   return lines.join("\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 }
 
-async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: { comment?: boolean; approve?: boolean }): Promise<void> {
+async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: {
+  comment?: boolean; approve?: boolean; dryRun?: boolean;
+}): Promise<void> {
   console.log(`\n${formatReport(snapshot, assessments)}\n`);
   const body = [...formatSummary(snapshot, assessments), snapshotDisclaimer].join("\n\n");
+  if (options.dryRun) {
+    console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
+    console.log(options.comment ? "[audit:dry-run] Comment would be posted."
+      : "[audit:dry-run] Comment would not be posted (--comment not set).");
+  }
   // Host-only side effects: never expose writes to the model or replay them through Durable.
-  if (options.comment) {
+  if (options.comment && !options.dryRun) {
     await postReviewComment(snapshot.target, body);
     console.log("[audit] Verdict comment posted to the PR");
   }
   if (options.approve) {
     if (!summarizeFindings(assessments).approvable) {
-      console.log("[audit] Approval skipped: not all actionable findings appear addressed.");
+      console.log(options.dryRun ? "[audit:dry-run] Approval would be skipped: not all actionable findings appear addressed."
+        : "[audit] Approval skipped: not all actionable findings appear addressed.");
       return;
     }
-    await approveReview(snapshot, body);
-    console.log(`[audit] PR approved at ${snapshot.headSha}`);
+    await approveReview(snapshot, body, options.dryRun);
+    console.log(options.dryRun ? `[audit:dry-run] PR would be approved at ${snapshot.headSha}`
+      : `[audit] PR approved at ${snapshot.headSha}`);
   }
 }
 
 export async function runAudit(url: string, options: {
-  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; approve?: boolean;
+  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; approve?: boolean; dryRun?: boolean;
 }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);

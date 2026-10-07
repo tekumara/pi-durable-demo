@@ -124,6 +124,31 @@ With both flags, the host posts the comment first, then submits the approval if 
 
 Approvals are not replayed by Durable, and the flag does not persist across invocations. Approval errors exit 1 but retain the completed assessment. A comment already posted by `--comment` remains if approval fails. Check the PR before retrying after an interruption or ambiguous network failure.
 
+### Preview comments and approvals
+
+Add `--dry-run` to show the exact comment body without writing to GitHub. Combine it with `--comment` to preview posting, and `--approve` to show whether the verdict permits approval:
+
+```sh
+npm run audit -- --dry-run --comment --approve https://github.com/owner/repo/pull/42
+```
+
+```text
+/audit --dry-run --comment --approve https://github.com/owner/repo/pull/42
+```
+
+The normal report is followed by a labelled comment preview and the planned actions. For an addressed verdict, the action preview looks like this:
+
+```text
+[audit:dry-run] Comment would be posted.
+[audit:dry-run] PR would be approved at 0123456789abcdef0123456789abcdef01234567
+```
+
+For an outstanding, uncertain or no-actionable-findings verdict, the approval preview says it would be skipped. An eligible approval still checks the current head and base SHAs; changed commits stop the dry-run with an error.
+
+The flag defaults to false and does not imply `--comment` or `--approve`. `--dry-run` alone shows the comment body but says it would not be posted. No comments or reviews are created, even when both action flags are set. A dry-run does not test GitHub write permissions or reviewer restrictions.
+
+The audit otherwise runs normally: it fetches evidence, may call the model, saves its assessment and uses the cache. You can combine `--dry-run` with `--force` to reassess fresh evidence. The flag does not persist across invocations.
+
 ### Assessment caching and restart
 
 A normal invocation follows this flow:
@@ -211,7 +236,7 @@ npm run check
 npm test
 ```
 
-The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
+The CLI tests use local simulated model and GitHub endpoints with temporary credentials. They exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. They do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 

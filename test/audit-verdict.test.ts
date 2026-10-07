@@ -180,19 +180,66 @@ for (const { statuses, approve, chat } of [
   });
 }
 
-for (const revision of ["headSha", "baseSha"] as const) {
-  test(`--approve refuses an otherwise good verdict when ${revision} changes during assessment`, { timeout: 20000 }, async (t) => {
+for (const { flags, status, approve, chat } of [
+  { flags: ["--comment"], status: "addressed", approve: false, chat: false },
+  { flags: ["--approve"], status: "addressed", approve: true, chat: true },
+  { flags: ["--comment", "--approve"], status: "uncertain", approve: false, chat: false },
+  { flags: [], status: "addressed", approve: false, chat: false },
+] satisfies { flags: string[]; status: Status; approve: boolean; chat: boolean }[]) {
+  test(`--dry-run previews ${flags.join(" ") || "no mutation flags"} without GitHub writes or persisting dry-run intent`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence();
+    let calls = 0;
     const f = await fixture(t, (_body, response) => {
-      github.state[revision] = "b".repeat(40);
-      assess(response);
+      calls++;
+      assess(response, [status]);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
-    const { child, done } = f.start(["--approve", url]);
-    child.stdin.end();
-    const result = await done;
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /PR commits changed since the audit snapshot/);
-    assert.match(result.stdout, /Verdict: All actionable findings appear addressed/);
+    const run = () => chat
+      ? f.run(`/audit --dry-run ${flags.join(" ")} ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
+      : f.run("", ["--dry-run", ...flags, url, "local/test"]);
+    const output = await run();
+    const preview = output.match(/\[audit:dry-run\] Verdict comment preview:\n\n([\s\S]*?)\n\n\[audit:dry-run\] Comment would/);
+    assert.ok(preview, "dry-run must show the exact proposed comment body");
+    assert.ok(preview[1].includes(`Head: ${sha}`));
+    assert.match(preview[1], status === "addressed" ? /Verdict: All actionable findings appear addressed/ : /Verdict: Not all actionable findings are addressed/);
+    assert.match(output, flags.includes("--comment") ? /Comment would be posted/ : /Comment would not be posted/);
+    if (flags.includes("--approve")) {
+      assert.match(output, approve ? /PR would be approved/ : /Approval would be skipped/);
+    } else assert.doesNotMatch(output, /PR would be approved/);
+    assert.doesNotMatch(output, /Verdict comment posted|\[audit\] PR approved/);
+    assert.equal(github.comments.length, 0);
     assert.equal(github.approvals.length, 0);
+
+    const cached = await run();
+    assert.match(cached, /Reusing saved assessment/);
+    assert.equal(calls, 1, "dry-run must use and publish the normal assessment cache");
+    assert.equal(github.comments.length, 0);
+    assert.equal(github.approvals.length, 0, "cached dry-runs must not submit reviews either");
+
+    await f.run("", [...flags, url]);
+    assert.equal(github.comments.length, flags.includes("--comment") ? 1 : 0);
+    assert.equal(github.approvals.length, approve ? 1 : 0);
+    if (flags.includes("--comment")) assert.equal(github.comments[0], preview[1]);
+    if (approve) assert.equal(github.approvals[0].body, preview[1]);
+    assert.equal(calls, 1);
   });
+}
+
+for (const revision of ["headSha", "baseSha"] as const) {
+  for (const dryRun of [false, true]) {
+    test(`--approve${dryRun ? " --dry-run" : ""} refuses an otherwise good verdict when ${revision} changes during assessment`, { timeout: 20000 }, async (t) => {
+      const github = githubEvidence();
+      const f = await fixture(t, (_body, response) => {
+        github.state[revision] = "b".repeat(40);
+        assess(response);
+      }, { entrypoint: resolve("audit.ts"), github: github.handler });
+      const { child, done } = f.start(["--approve", ...(dryRun ? ["--dry-run"] : []), url]);
+      child.stdin.end();
+      const result = await done;
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /PR commits changed since the audit snapshot/);
+      assert.match(result.stdout, /Verdict: All actionable findings appear addressed/);
+      assert.doesNotMatch(result.stdout, /PR would be approved/);
+      assert.equal(github.approvals.length, 0);
+    });
+  }
 }
