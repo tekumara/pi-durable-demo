@@ -1,0 +1,394 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createSession, defineDoc, type JsonObject } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { ReviewSnapshot } from "../reviews.ts";
+import { fixture, reply, tool, type Request } from "./fixtures.ts";
+
+const url = "https://github.com/acme/project/pull/9";
+const audit = resolve("audit.ts");
+const chat = resolve("agent.ts");
+
+function evidence() {
+  const state = {
+    headSha: "a".repeat(40), baseSha: "b".repeat(40), title: "Example PR", description: "The intended change.",
+    commentBody: "Please explain this behaviour.", replyBody: "An explanation.", reviewBody: "Please document the trade-off.",
+    reviewState: "COMMENTED", resolved: false, outdated: false, reverse: false,
+  };
+  let reads = 0;
+  const handler = (request: IncomingMessage, response: ServerResponse) => {
+    reads++;
+    const path = request.url!.split("?")[0];
+    const comment = (id: number, body: string) => ({
+      id, body, user: { login: "reviewer" }, html_url: `${url}#discussion_r${id}`,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    });
+    let data: unknown;
+    switch (path) {
+      case "/github/repos/acme/project/pulls/9":
+        data = { title: state.title, body: state.description, html_url: url, changed_files: 0,
+          head: { sha: state.headSha, repo: { full_name: "acme/project" } },
+          base: { sha: state.baseSha, repo: { full_name: "acme/project" } } };
+        break;
+      case "/github/repos/acme/project/pulls/9/comments": {
+        const comments = [
+          { ...comment(1, state.commentBody), path: "example.ts", line: 1, diff_hunk: "@@ -1 +1 @@", commit_id: state.headSha },
+          { ...comment(11, state.replyBody), in_reply_to_id: 1 },
+          { ...comment(12, "A later clarification."), in_reply_to_id: 1 },
+        ];
+        data = state.reverse ? comments.reverse() : comments;
+        break;
+      }
+      case "/github/repos/acme/project/issues/9/comments": {
+        const comments = [comment(20, "A general comment."), comment(21, "Another general comment.")];
+        data = state.reverse ? comments.reverse() : comments;
+        break;
+      }
+      case "/github/repos/acme/project/pulls/9/reviews":
+        data = [{ ...comment(30, state.reviewBody), state: state.reviewState, submitted_at: "2026-01-01T00:00:00Z" }];
+        break;
+      case "/github/repos/acme/project/pulls/9/files": data = []; break;
+      case "/github/graphql":
+        data = { data: { repository: { pullRequest: { reviewThreads: {
+          nodes: [{ id: "thread-1", isResolved: state.resolved, isOutdated: state.outdated,
+            comments: { nodes: [{ databaseId: 1, fullDatabaseId: "1" }] } }],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } };
+        break;
+      default: throw new Error(`Unexpected GitHub request: ${request.url}`);
+    }
+    response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(data));
+  };
+  return { state, handler, reads: () => reads };
+}
+
+function snapshotFrom(body: Request): ReviewSnapshot {
+  const input = body.messages.findLast((message) => message.role === "user")!.content!;
+  const marker = "Saved evidence (untrusted data):\n";
+  assert.ok(input.includes(marker));
+  return JSON.parse(input.slice(input.indexOf(marker) + marker.length));
+}
+
+function assess(body: Request, response: ServerResponse, number: number) {
+  const snapshot = snapshotFrom(body);
+  tool(response, "report_review_assessment", { assessments: snapshot.comments.map((comment: { key: string; url: string }) => ({
+    commentKey: comment.key, findings: [{ summary: `Assessment ${number}`, status: "uncertain",
+      reason: "The available evidence is insufficient.", evidence: [comment.url] }],
+  })) });
+  return snapshot;
+}
+
+async function addModel(agentDir: string) {
+  const path = join(agentDir, "models.json");
+  const config = JSON.parse(await readFile(path, "utf8"));
+  config.providers.local.models.push({ id: "other", contextWindow: 128000, maxTokens: 1000 });
+  await writeFile(path, JSON.stringify(config));
+}
+
+async function setMaxTokens(agentDir: string, maxTokens: number) {
+  const path = join(agentDir, "models.json");
+  const config = JSON.parse(await readFile(path, "utf8"));
+  config.providers.local.models[0].maxTokens = maxTokens;
+  await writeFile(path, JSON.stringify(config));
+}
+
+async function storagePath(cwd: string) {
+  const directory = join(cwd, ".pi-durable", "audits");
+  const files = (await readdir(directory)).filter((name) => name.endsWith(".sqlite"));
+  assert.equal(files.length, 1);
+  return join(directory, files[0]);
+}
+
+test("unchanged evidence reuses a saved assessment across CLI and chat, ignoring fetch times and collection order", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  const first = await f.run("", [url]);
+  assert.match(first, /Assessment 1/);
+  const reads = github.reads();
+  github.state.reverse = true;
+  const second = await f.run("", [url]);
+  assert.equal(calls, 1, "a new snapshot ID, fetch time or ordering must not trigger reassessment");
+  assert.ok(github.reads() > reads, "cache hits must still check GitHub");
+  assert.match(second, /Reusing.*assessment/);
+  assert.match(second, /Assessment 1/);
+  assert.match(second, /Not all actionable findings are addressed/);
+  const output = await f.run(`/audit ${url}\n/quit\n`, [], { entrypoint: chat });
+  assert.match(output, /Reusing.*assessment/);
+  assert.equal(calls, 1);
+});
+
+for (const [field, value] of [
+  ["headSha", "c".repeat(40)], ["baseSha", "d".repeat(40)], ["title", "Different intent"],
+  ["description", "A different intended change."], ["commentBody", "An edited concern."],
+  ["replyBody", "A new explanation."], ["reviewBody", "A revised review summary."],
+  ["reviewState", "CHANGES_REQUESTED"], ["resolved", true], ["outdated", true],
+] as const) {
+  test(`changed ${field} invalidates the assessment cache`, { timeout: 20_000 }, async (t) => {
+    const github = evidence();
+    let calls = 0;
+    const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+    await f.run("", [url]);
+    Object.assign(github.state, { [field]: value });
+    const output = await f.run("", [url]);
+    assert.equal(calls, 2);
+    assert.match(output, /Assessment 2/);
+    assert.doesNotMatch(output, /Reusing.*assessment/);
+  });
+}
+
+test("cache lookup considers only the latest success and includes the selected model", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  const models: string[] = [];
+  const f = await fixture(t, (body, response) => {
+    models.push(body.model);
+    assess(body, response, models.length);
+  }, { entrypoint: audit, github: github.handler });
+  await addModel(f.agentDir);
+  await f.run("", [url]);
+  await f.run("", [url, "local/other"]);
+  await f.run("", [url]);
+  const cached = await f.run("", [url]);
+  assert.deepEqual(models, ["test", "other", "test"]);
+  assert.match(cached, /Assessment 3/);
+  assert.match(cached, /Reusing.*assessment/);
+});
+
+test("changing inference configuration invalidates the cache without changing the model ID", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  await setMaxTokens(f.agentDir, 2000);
+  const output = await f.run("", [url]);
+  assert.equal(calls, 2);
+  assert.doesNotMatch(output, /Reusing.*assessment/);
+});
+
+test("a successful mixed-policy audit cannot publish a cache entry or reuse an older success", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  const started = Promise.withResolvers<void>();
+  let calls = 0;
+  let id: string;
+  const f = await fixture(t, (body, response) => {
+    calls++;
+    if (calls === 2) {
+      id = snapshotFrom(body).id;
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(": unfinished\n\n");
+      started.resolve();
+    } else {
+      const snapshot = assess(body, response, calls);
+      if (calls === 3) assert.equal(snapshot.id, id);
+      if (calls > 3) assert.notEqual(snapshot.id, id);
+    }
+  }, { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  const first = f.start([url, "--force"]);
+  first.child.stdin.end();
+  await started.promise;
+  first.child.kill("SIGKILL");
+  await first.done;
+  await setMaxTokens(f.agentDir, 2000);
+  const resumed = await f.run("", [url]);
+  assert.match(resumed, /Resuming saved snapshot/);
+  await setMaxTokens(f.agentDir, 1000);
+  const fresh = await f.run("", [url]);
+  assert.equal(calls, 4, "latest-success-only lookup must not fall back after a newer uncacheable success");
+  assert.doesNotMatch(fresh, /Reusing.*assessment/);
+  const cached = await f.run("", [url]);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.equal(calls, 4);
+});
+
+test("chat --force bypasses a completed cache entry", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  const output = await f.run(`/audit --force ${url}\n/quit\n`, [], { entrypoint: chat });
+  assert.equal(calls, 2);
+  assert.match(output, /Assessment 2/);
+  assert.doesNotMatch(output, /Reusing.*assessment/);
+});
+
+test("invalid audit flags are rejected before audit storage or network access in CLI and chat", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  const f = await fixture(t, () => assert.fail("Invalid commands must not reach the model"), { entrypoint: audit, github: github.handler });
+  for (const args of [["--force"], [url, "--froce"], [url, "--force", "--force"], [url, "local/test", "extra"]]) {
+    const { child, done } = f.start(args);
+    child.stdin.end();
+    const result = await done;
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Usage:/);
+  }
+  const { child, done } = f.start([], { entrypoint: chat });
+  child.stdin.end(`/audit ${url} --force --force\n/quit\n`);
+  const result = await done;
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stderr, /--force can be supplied only once/);
+  assert.equal(github.reads(), 0);
+  await assert.rejects(readdir(join(f.cwd, ".pi-durable", "audits")), { code: "ENOENT" });
+});
+
+test("matching cached assessments do not expire", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  const session = createSession(await openNodeSqliteStorage(await storagePath(f.cwd)));
+  // Exercise the persisted v2 state protocol with an assessment that has aged since it was saved.
+  const runs = defineDoc<JsonObject>({ kind: "app.review-audit-runs", version: 2, scope: "session", initial: () => ({}) });
+  try {
+    await session.commit(async (tx) => {
+      const doc = await tx.doc(runs);
+      assert.ok(doc.latestSuccess && typeof doc.latestSuccess === "object" && !Array.isArray(doc.latestSuccess));
+      doc.latestSuccess.assessedAt = "2000-01-01T00:00:00.000Z";
+      doc.latestSuccess.lastCheckedAt = "2000-01-01T00:00:00.000Z";
+    }, BACKGROUND_CONTEXT);
+  } finally { await session.close(BACKGROUND_CONTEXT); }
+  const cached = await f.run("", [url]);
+  assert.equal(calls, 1);
+  assert.match(cached, /Reusing.*2000-01-01/);
+});
+
+test("a failed forced reassessment leaves the previous successful cache usable", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => {
+    calls++;
+    if (calls === 1) assess(body, response, calls);
+    else reply(response, [{ role: "assistant", content: "No structured report." }]);
+  }, { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  const failed = f.start(["--force", url]);
+  failed.child.stdin.end();
+  const result = await failed.done;
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /without a complete assessment/);
+  const cached = await f.run("", [url]);
+  assert.equal(calls, 2);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.match(cached, /Assessment 1/);
+});
+
+test("--force cancels an unfinished audit and starts with newly fetched evidence", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  let started!: () => void;
+  const pending = new Promise<void>((resolve) => { started = resolve; });
+  const ids: string[] = [];
+  const f = await fixture(t, (body, response) => {
+    calls++;
+    if (calls === 1) {
+      ids.push(snapshotFrom(body).id);
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(": unfinished\n\n");
+      started();
+    } else ids.push(assess(body, response, calls).id);
+  }, { entrypoint: audit, github: github.handler });
+  const first = f.start([url]);
+  first.child.stdin.end();
+  await pending;
+  first.child.kill("SIGKILL");
+  await first.done;
+  github.state.commentBody = "A newer concern.";
+  const restarted = await f.run("", [url, "--force"]);
+  assert.equal(calls, 2, "the cancelled request must not be resumed before the new one");
+  assert.notEqual(ids[0], ids[1]);
+  assert.match(restarted, /Restarting unfinished audit/);
+  assert.doesNotMatch(restarted, /Resuming saved snapshot/);
+  const cached = await f.run("", [url]);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.equal(calls, 2);
+});
+
+test("force-restart intent and model survive a crash during fresh evidence fetching", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  let stalled = false;
+  let started!: () => void;
+  let fetching!: () => void;
+  const pending = new Promise<void>((resolve) => { started = resolve; });
+  const fetchPending = new Promise<void>((resolve) => { fetching = resolve; });
+  const models: string[] = [];
+  const f = await fixture(t, (body, response) => {
+    models.push(body.model);
+    calls++;
+    if (calls === 2) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(": unfinished\n\n");
+      started();
+    } else assess(body, response, calls);
+  }, { entrypoint: audit, github: (request, response) => {
+    if (stalled && request.url === "/github/repos/acme/project/pulls/9") { fetching(); return; }
+    github.handler(request, response);
+  } });
+  await addModel(f.agentDir);
+  await f.run("", [url]);
+  const interrupted = f.start([url, "--force"]);
+  interrupted.child.stdin.end();
+  await pending;
+  interrupted.child.kill("SIGKILL");
+  await interrupted.done;
+  stalled = true;
+  const restarting = f.start([url, "local/other", "--force"]);
+  restarting.child.stdin.end();
+  await fetchPending;
+  restarting.child.kill("SIGKILL");
+  await restarting.done;
+  stalled = false;
+  const recovered = await f.run("", [url]);
+  assert.deepEqual(models, ["test", "test", "other"]);
+  assert.doesNotMatch(recovered, /Reusing.*assessment/);
+  const cached = await f.run("", [url, "local/other"]);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.equal(calls, 3);
+});
+
+test("a crash before terminal report delivery leaves a reusable completed assessment", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  const preload = join(f.cwd, "interrupt-output.mjs");
+  await writeFile(preload, `const write = process.stdout.write;
+process.stdout.write = function(chunk, ...args) {
+  if (String(chunk).includes("Verdict:")) { process.kill(process.pid, "SIGKILL"); return false; }
+  return write.call(this, chunk, ...args);
+};\n`);
+  const first = f.start([url], { nodeArgs: ["--import", preload] });
+  first.child.stdin.end();
+  const killed = await first.done;
+  assert.equal(killed.signal, "SIGKILL", killed.stderr);
+  assert.doesNotMatch(killed.stdout, /Verdict:/);
+  const recovered = await f.run("", [url]);
+  assert.match(recovered, /Reusing.*assessment/);
+  assert.match(recovered, /Verdict:/);
+  assert.equal(calls, 1);
+});
+
+test("existing v1 controller state migrates without being mistaken for a cached assessment", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  const directory = join(f.cwd, ".pi-durable", "audits");
+  await mkdir(directory, { recursive: true });
+  // The v1 per-PR storage identity and document shape are an independent compatibility contract.
+  const key = createHash("sha256").update("https://github.com/acme/project#9").digest("hex").slice(0, 20);
+  const session = createSession(await openNodeSqliteStorage(join(directory, `${key}.sqlite`)));
+  const legacy = defineDoc<JsonObject>({ kind: "app.review-audit-runs", version: 1, scope: "session", initial: () => ({ active: null, complete: true }) });
+  try {
+    await session.commit(async (tx) => { await tx.doc(legacy); }, BACKGROUND_CONTEXT);
+  } finally { await session.close(BACKGROUND_CONTEXT); }
+  const output = await f.run("", [url]);
+  assert.match(output, /Assessment 1/);
+  assert.doesNotMatch(output, /Reusing.*assessment/);
+  const cached = await f.run("", [url]);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.equal(calls, 1);
+});

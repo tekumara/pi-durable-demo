@@ -1,18 +1,18 @@
 import { runAudit } from "./auditor.ts";
 import { createModelRuntime } from "./model.ts";
-import { parseReviewTarget } from "./reviews.ts";
+import { AUDIT_CLI_USAGE, parseAuditOptions } from "./audit-options.ts";
 
 async function main() {
-  const [url, requested, ...extra] = process.argv.slice(2);
-  if (!url || extra.length || url === "--help" || url === "-h") {
-    console.log("Usage: npm run audit -- <GitHub PR URL> [provider/model-id]");
-    if (!url || extra.length) process.exitCode = 1;
+  const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(AUDIT_CLI_USAGE);
+    console.log("--force bypasses the assessment cache and restarts any unfinished audit.");
     return;
   }
-  parseReviewTarget(url); // Validate before credentials, storage, or network access.
+  const { url, requested, force } = parseAuditOptions(args, "cli");
   const cwd = process.cwd();
   const { models, model } = await createModelRuntime(cwd, requested);
-  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id } });
+  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force });
 }
 
 main().catch((error) => {

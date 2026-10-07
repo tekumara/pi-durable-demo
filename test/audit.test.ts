@@ -239,4 +239,7 @@ test("restart resumes the saved audit snapshot without refetching or resubmittin
   assert.match(output, /Resuming saved snapshot/);
   assert.match(output, /Verdict: Not all actionable findings are addressed/);
   assert.equal(turn, 3);
+  const cached = await f.run("", [prUrl]);
+  assert.match(cached, /Reusing saved assessment/);
+  assert.equal(turn, 3, "a recovered successful assessment must be published to the cache");
 });

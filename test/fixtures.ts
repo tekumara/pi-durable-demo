@@ -7,8 +7,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { TestContext } from "node:test";
 
-export type Request = { messages: { role: string; content?: string; tool_calls?: unknown[] }[]; tools: { function: { name: string } }[] };
+export type Request = { model: string; messages: { role: string; content?: string; tool_calls?: unknown[] }[]; tools: { function: { name: string } }[] };
 const entrypoint = resolve("agent.ts");
+type Launch = { nodeArgs?: string[]; entrypoint?: string };
 
 // External HTTP endpoints are simulated. The CLI, Pi auth, tools, and SQLite are real.
 export async function fixture(t: TestContext, respond: (body: Request, response: ServerResponse) => void, options: {
@@ -65,8 +66,8 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
     models: [{ id: "test", contextWindow: 128000, maxTokens: 1000 }],
   } } }));
 
-  const start = (args: string[] = []) => {
-    const child = spawn(process.execPath, ["--experimental-strip-types", options.entrypoint ?? entrypoint, ...args], {
+  const start = (args: string[] = [], launch: Launch = {}) => {
+    const child = spawn(process.execPath, [...(launch.nodeArgs ?? []), "--experimental-strip-types", launch.entrypoint ?? options.entrypoint ?? entrypoint, ...args], {
       cwd,
       env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1",
         ...(options.github ? {
@@ -84,8 +85,8 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
     const done = once(child, "close").then(([code, signal]) => ({ code, signal, stdout, stderr }));
     return { child, done };
   };
-  const run = async (input: string, args: string[] = []) => {
-    const { child, done } = start(args);
+  const run = async (input: string, args: string[] = [], launch: Launch = {}) => {
+    const { child, done } = start(args, launch);
     child.stdin.end(input);
     const result = await done;
     assert.equal(result.code, 0, result.stderr);
