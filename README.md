@@ -74,7 +74,7 @@ Bare acknowledgements, unsupported excuses and unexplained promises to fix later
 
 ### Post a verdict comment
 
-Add `--apply --comment` to post the verdict, finding counts, audited head SHA and evidence fetch window as a general PR comment. It also explains each outstanding or uncertain finding, with links to the original comment and supporting evidence:
+Add `--apply --comment` to post a compact audit comment. It shows the verdict, finding counts, and each outstanding or uncertain finding with its next step and original review link. Reasoning, evidence links and audit metadata sit in collapsed GitHub Markdown sections:
 
 ```sh
 pronto --apply --comment https://github.com/owner/repo/pull/42
@@ -82,45 +82,67 @@ pronto --apply --comment https://github.com/owner/repo/pull/42
 
 Example comment:
 
-```text
-PR review audit · https://github.com/owner/repo/pull/42
+```markdown
+## Review audit · Changes needed
 
-Head: 0123456789abcdef0123456789abcdef01234567
+4 addressed · 1 outstanding · 1 uncertain
 
-Evidence fetched: 2026-06-01T12:00:00.000Z to 2026-06-01T12:00:03.000Z
+### Changes needed: Missing access check
 
-Verdict: Not all actionable findings are addressed.
+Next step: Check the user's role before granting access.
 
-Findings: 4 addressed · 1 outstanding · 1 uncertain · 2 not-actionable
+[Original review finding](https://github.com/owner/repo/pull/42#discussion_r101)
 
-Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.
+### Needs verification: Undefined access policy
 
-GitHub: 3/5 inline threads resolved (0 unknown). PR-level comments and review summaries have no thread-resolution state.
+Next step: Confirm which roles should have access.
 
-## Outstanding or uncertain findings
+[Original review finding](https://github.com/owner/repo/pull/42#issuecomment-202)
 
-### outstanding: Missing access check
+<details>
+<summary>Reasoning and evidence</summary>
+
+### Changes needed: Missing access check
 
 The current code still grants access without checking the user's role.
-
-Review comment: https://github.com/owner/repo/pull/42#discussion_r101
 
 Evidence:
 - https://github.com/owner/repo/blob/0123456789abcdef0123456789abcdef01234567/src/access.ts#L1-L3
 
-### uncertain: Undefined access policy
+### Needs verification: Undefined access policy
 
 The discussion does not specify which roles should have access, so the intended behaviour cannot be verified.
-
-Review comment: https://github.com/owner/repo/pull/42#issuecomment-202
 
 Evidence:
 - https://github.com/owner/repo/pull/42#issuecomment-202
 
-This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.
+</details>
+
+<details>
+<summary>Audit context</summary>
+
+- PR: [owner/repo#42](https://github.com/owner/repo/pull/42)
+- audited head: `0123456789abcdef0123456789abcdef01234567`
+- evidence fetched: 2026-06-01T12:00:00.000Z to 2026-06-01T12:00:03.000Z
+- inline threads: 3/5 resolved (0 unknown)
+- other findings: 2 not actionable
+
+Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.
+
+PR-level comments and review summaries have no thread-resolution state.
+
+This audit checks review findings, not overall PR correctness.
+
+</details>
+
+Assesses a saved snapshot, not the PR's current live state.
+
+<!-- pi-durable-demo:review-audit -->
 ```
 
-The comment includes details only for `outstanding` and `uncertain` findings. If there are none, it contains the summary only. Both the terminal report and comment explain that `addressed` includes supported explanations and scope decisions, not just code fixes. The terminal report retains explanations and evidence for all findings.
+The headline is “Changes needed” when findings remain outstanding, or “Verification needed” when only uncertainty remains. With neither, it says “All actionable findings addressed” if there is at least one addressed finding, or “No actionable findings identified” otherwise.
+
+Outstanding findings appear before uncertain findings. Only their reasoning and evidence appear in the first collapsed section. If there are none, that section is omitted. Audit context remains available, including the audited head, fetch window, thread-resolution counts, non-actionable count and meaning of `addressed`. Saved assessments without a specific next step use a generic action for their status. The terminal report retains explanations and evidence for all findings.
 
 `--comment` defaults to false. Without `--apply`, it previews the comment without posting it. Both flags can appear before or after the target or CLI model argument, and you can combine them with `--force`. Your GitHub token needs permission to create and edit PR comments.
 

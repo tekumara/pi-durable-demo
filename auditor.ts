@@ -13,13 +13,14 @@ const Finding = Type.Object({
   summary: Type.String({ minLength: 1 }),
   status: Type.Union(["addressed", "outstanding", "uncertain", "not-actionable"].map((s) => Type.Literal(s))),
   reason: Type.String({ minLength: 1 }),
+  nextStep: Type.Optional(Type.String({ minLength: 1 })),
   evidence: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
 }, { additionalProperties: false });
 const Report = Type.Object({ assessments: Type.Array(Type.Object({
   commentKey: Type.String({ minLength: 1 }), findings: Type.Array(Finding, { minItems: 1 }),
 }, { additionalProperties: false })) }, { additionalProperties: false });
 type Assessment = { commentKey: string; findings: {
-  summary: string; status: string; reason: string; evidence: string[];
+  summary: string; status: string; reason: string; nextStep?: string; evidence: string[];
 }[] };
 
 const AuditDocument = defineDoc<{
@@ -85,6 +86,10 @@ Missing patches are not evidence of no change. Fetch actual files. Never invent 
 General PR comments have no threaded reply list; an empty replies array proves nothing about responses.
 Finish by calling report_review_assessment with exactly one assessment for every supplied comment key.
 Cite exact URLs from supplied comments, replies, or file-tool results. Explain each verdict.
+Keep each summary to a short title and put detailed reasoning in reason.
+For outstanding and uncertain findings, include nextStep as one short sentence stating what would
+address the concern or make it verifiable. If audit tools cannot verify claimed evidence, ask to
+verify that evidence rather than assuming it is missing or requiring the work to be repeated.
 Do not claim "all addressed" when any actionable finding is outstanding or uncertain.
 You have no filesystem, shell, GitHub mutation, or arbitrary-network tools.`;
 
@@ -231,21 +236,47 @@ function formatReport(snapshot: ReviewSnapshot, assessments: Assessment[]): stri
 }
 
 function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): string {
-  const sections = formatSummary(snapshot, assessments);
+  const { counts, approvable } = summarizeFindings(assessments);
+  const headline = counts.outstanding ? "Changes needed" : counts.uncertain ? "Verification needed"
+    : approvable ? "All actionable findings addressed" : "No actionable findings identified";
+  const sections = [
+    `## Review audit · ${headline}`,
+    `${counts.addressed} addressed · ${counts.outstanding} outstanding · ${counts.uncertain} uncertain`,
+  ];
   const byKey = new Map(assessments.map((a) => [a.commentKey, a]));
+  const pending = ["outstanding", "uncertain"].flatMap((status) => snapshot.comments.flatMap((comment) =>
+    byKey.get(comment.key)!.findings.filter((finding) => finding.status === status).map((finding) => ({ comment, finding }))));
   const details: string[] = [];
-  for (const comment of snapshot.comments) {
-    for (const finding of byKey.get(comment.key)!.findings) {
-      if (finding.status !== "outstanding" && finding.status !== "uncertain") continue;
-      details.push([
-        `### ${finding.status}: ${finding.summary}`, finding.reason,
-        `Review comment: ${comment.url}`,
-        `Evidence:\n${finding.evidence.map((url) => `- ${url}`).join("\n")}`,
-      ].join("\n\n"));
-    }
+  for (const { comment, finding } of pending) {
+    const label = finding.status === "outstanding" ? "Changes needed" : "Needs verification";
+    // Saved assessments may predate nextStep. Keep them readable without inventing a specific remedy.
+    const nextStep = finding.nextStep ?? (finding.status === "outstanding"
+      ? "Address the finding with a code fix or an evidence-supported explanation."
+      : "Provide verifiable evidence to assess this finding.");
+    sections.push(`### ${label}: ${finding.summary}`, `Next step: ${nextStep}`,
+      `[Original review finding](${comment.url})`);
+    details.push([
+      `### ${label}: ${finding.summary}`, finding.reason,
+      `Evidence:\n${finding.evidence.map((url) => `- ${url}`).join("\n")}`,
+    ].join("\n\n"));
   }
-  if (details.length) sections.push("## Outstanding or uncertain findings", ...details);
-  sections.push(snapshotDisclaimer, AUDIT_COMMENT_MARKER);
+  if (details.length) sections.push([
+    "<details>", "<summary>Reasoning and evidence</summary>", "", details.join("\n\n"), "", "</details>",
+  ].join("\n"));
+  const inline = snapshot.comments.filter((c) => c.kind === "inline");
+  const resolved = inline.filter((c) => c.thread?.resolved).length;
+  const unknown = inline.filter((c) => !c.thread).length;
+  sections.push([
+    "<details>", "<summary>Audit context</summary>", "",
+    `- PR: [${snapshot.target.owner}/${snapshot.target.repo}#${snapshot.target.pr}](${snapshot.target.url})`,
+    `- audited head: \`${snapshot.headSha}\``,
+    `- evidence fetched: ${snapshot.startedAt} to ${snapshot.fetchedAt}`,
+    `- inline threads: ${resolved}/${inline.length} resolved (${unknown} unknown)`,
+    `- other findings: ${counts["not-actionable"]} not actionable`, "",
+    "Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.", "",
+    "PR-level comments and review summaries have no thread-resolution state.", "",
+    "This audit checks review findings, not overall PR correctness.", "", "</details>",
+  ].join("\n"), "Assesses a saved snapshot, not the PR's current live state.", AUDIT_COMMENT_MARKER);
   return stripControlCharacters(sections.join("\n\n"));
 }
 

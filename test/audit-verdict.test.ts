@@ -116,6 +116,7 @@ for (const status of ["addressed", "uncertain"] as const) {
       assess(body, response, [status]);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
     const verdict = status === "addressed" ? /Verdict: All actionable findings appear addressed/ : /Verdict: Not all actionable findings are addressed/;
+    const commentHeadline = status === "addressed" ? /## Review audit · All actionable findings addressed/ : /## Review audit · Verification needed/;
     const output = await f.run("", [url]);
     assert.match(output, verdict);
     assert.match(output, /GitHub: 0\/1 inline threads resolved/);
@@ -141,10 +142,10 @@ for (const status of ["addressed", "uncertain"] as const) {
     assert.match(posted, verdict);
     assert.match(posted, status === "addressed" ? /Verdict comment updated/ : /Verdict comment posted/);
     assert.equal(github.comments.length, status === "addressed" ? 2 : 1);
-    assert.match(github.comments[0], verdict);
-    assert.ok(github.comments[0].includes(`Head: ${sha}`));
+    assert.match(github.comments[0], commentHeadline);
+    assert.ok(github.comments[0].includes(`audited head: \`${sha}\``));
     assert.match(github.comments[0], status === "addressed" ? /1 addressed · 0 outstanding · 0 uncertain/ : /0 addressed · 0 outstanding · 1 uncertain/);
-    assert.match(github.comments[0], /saved snapshot, not proof/);
+    assert.match(github.comments[0], /saved snapshot, not the PR's current live state/);
     assert.match(github.comments[0], /Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change\./);
     if (status === "addressed") {
       assert.equal(github.issueComments.length, 1, "repeated posting must update rather than append");
@@ -153,8 +154,8 @@ for (const status of ["addressed", "uncertain"] as const) {
       assert.equal(github.approvals.length, 1);
       assert.equal(github.approvals[0].event, "APPROVE");
       assert.equal(github.approvals[0].commit_id, sha);
-      assert.match(github.approvals[0].body, verdict);
-      assert.doesNotMatch(github.comments[0], /Outstanding or uncertain findings|The reply explains the intentional behaviour/);
+      assert.match(github.approvals[0].body, commentHeadline);
+      assert.doesNotMatch(github.comments[0], /Reasoning and evidence|The reply explains the intentional behaviour/);
       assert.match(posted, /PR approved/);
     } else {
       assert.doesNotMatch(posted, /Reusing saved assessment/);
@@ -190,7 +191,7 @@ test("sticky comments replace the latest own audit across pages, preview updates
   assert.match(updated, /Verdict comment updated/);
   assert.deepEqual(github.updates, [11], "choose the latest created audit, not the latest edited or unrelated comment");
   assert.equal(github.issueComments.length, 5);
-  assert.match(github.issueComments[1].body, /Verdict: Not all actionable findings are addressed/);
+  assert.match(github.issueComments[1].body, /## Review audit · Verification needed/);
   assert.ok(github.issueComments[1].body.endsWith(marker));
   assert.ok(preview.includes(github.issueComments[1].body), "preview must match the replacement body");
   assert.deepEqual(github.issueComments.filter((comment) => comment.id !== 11), original.filter((comment) => comment.id !== 11));
@@ -210,28 +211,30 @@ test("sticky comments replace the latest own audit across pages, preview updates
   assert.deepEqual(github.updates, [11, latest.id]);
   assert.equal(github.issueComments.length, 7);
   assert.notEqual(latest.body, previousBody, "sticky must replace the body, not just find the comment");
-  assert.match(latest.body, /Verdict: All actionable findings appear addressed/);
-  assert.doesNotMatch(latest.body, /Outstanding or uncertain findings/);
+  assert.match(latest.body, /## Review audit · All actionable findings addressed/);
+  assert.doesNotMatch(latest.body, /Reasoning and evidence/);
 
   await f.run("", ["--sticky", "--comment", "--apply", url]);
   assert.deepEqual(github.updates, [11, latest.id, latest.id]);
   assert.equal(github.issueComments.length, 7);
 });
 
-test("verdict comments explain every outstanding or uncertain finding with its source and evidence, omitting other finding details", { timeout: 20000 }, async (t) => {
+test("verdict comments keep open findings and next steps visible and collapse reasoning and audit context", { timeout: 20000 }, async (t) => {
   const github = githubEvidence({ issueComment: true });
   const issueUrl = `${url}#issuecomment-3`;
   const f = await fixture(t, (_body, response) => {
     tool(response, "report_review_assessment", { assessments: [
       { commentKey: "inline:1", findings: [
         { summary: "Missing access check", status: "outstanding",
-          reason: "The current code still grants access without checking roles.\u001b", evidence: [evidenceUrl, `${url}#discussion_r2`] },
+          reason: "The current code still grants access without checking roles.\u001b",
+          nextStep: "Check the user's role before granting access.", evidence: [evidenceUrl, `${url}#discussion_r2`] },
         { summary: "Null guard", status: "addressed", reason: "The null guard is already fixed.", evidence: [evidenceUrl] },
         { summary: "Duplicate request", status: "not-actionable", reason: "This repeats the access check finding.", evidence: [evidenceUrl] },
       ] },
       { commentKey: "comment:3", findings: [
         { summary: "Undefined access policy", status: "uncertain",
-          reason: "The discussion does not specify which roles should have access.", evidence: [issueUrl] },
+          reason: "The discussion does not specify which roles should have access.",
+          nextStep: "Confirm which roles should have access.", evidence: [issueUrl] },
         { summary: "Missing policy documentation", status: "outstanding",
           reason: "The requested policy documentation is still absent.", evidence: [issueUrl] },
       ] },
@@ -240,11 +243,32 @@ test("verdict comments explain every outstanding or uncertain finding with its s
   await f.run("", ["--comment", "--apply", url]);
   assert.equal(github.comments.length, 1);
   const body = github.comments[0];
-  assert.match(body, /1 addressed · 2 outstanding · 1 uncertain · 1 not-actionable/);
-  assert.match(body, /outstanding: Missing access check\n\nThe current code still grants access without checking roles\.\n\nReview comment: https:\/\/github\.com\/acme\/demo\/pull\/8#discussion_r1/);
-  assert.ok(body.includes(`${url}#discussion_r2`), "all evidence links must be included, not just the original comment");
-  assert.match(body, /uncertain: Undefined access policy\n\nThe discussion does not specify which roles should have access\.\n\nReview comment: https:\/\/github\.com\/acme\/demo\/pull\/8#issuecomment-3/);
-  assert.match(body, /outstanding: Missing policy documentation\n\nThe requested policy documentation is still absent/);
+  const disclosures = [...body.matchAll(/<details>\n<summary>(.*?)<\/summary>\n([\s\S]*?)\n<\/details>/g)];
+  assert.deepEqual(disclosures.map((match) => match[1]), ["Reasoning and evidence", "Audit context"]);
+  const visible = body.replace(/<details>[\s\S]*?<\/details>/g, "");
+  assert.match(visible, /## Review audit · Changes needed/);
+  assert.match(visible, /1 addressed · 2 outstanding · 1 uncertain/);
+  assert.match(visible, /### Changes needed: Missing access check/);
+  assert.match(visible, /Next step: Check the user's role before granting access\./);
+  assert.ok(visible.includes(`[Original review finding](${evidenceUrl})`));
+  assert.match(visible, /### Needs verification: Undefined access policy/);
+  assert.match(visible, /Next step: Confirm which roles should have access\./);
+  assert.ok(visible.includes(`[Original review finding](${issueUrl})`));
+  assert.match(visible, /### Changes needed: Missing policy documentation/);
+  assert.match(visible, /Next step: Address the finding with a code fix or an evidence-supported explanation\./,
+    "older assessments without a next step must still render");
+  assert.ok(visible.indexOf("Changes needed: Missing policy documentation") < visible.indexOf("Needs verification: Undefined access policy"),
+    "confirmed outstanding findings must precede uncertain findings");
+  assert.doesNotMatch(visible, /still grants access|does not specify|still absent|audited head|evidence fetched|inline threads|not actionable/);
+  assert.match(disclosures[0][2], /The current code still grants access without checking roles\./);
+  assert.match(disclosures[0][2], /The discussion does not specify which roles should have access\./);
+  assert.match(disclosures[0][2], /The requested policy documentation is still absent\./);
+  assert.ok(disclosures[0][2].includes(`${url}#discussion_r2`), "all evidence links must be retained inside the disclosure");
+  assert.ok(disclosures[1][2].includes(`audited head: \`${sha}\``));
+  assert.match(disclosures[1][2], /evidence fetched: .* to /);
+  assert.match(disclosures[1][2], /inline threads: 0\/1 resolved \(0 unknown\)/);
+  assert.match(disclosures[1][2], /other findings: 1 not actionable/);
+  assert.match(visible, /Assesses a saved snapshot, not the PR's current live state\./);
   assert.doesNotMatch(body, /Null guard|already fixed|Duplicate request|repeats the access check|\u001b/);
 });
 
@@ -302,6 +326,11 @@ for (const { statuses, approve, chat } of [
   test(`--approve --apply ${approve ? "approves" : "skips"} ${statuses.join(" + ") || "an empty audit"} without posting a comment`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence({ empty: !statuses.length });
     const f = await fixture(t, (body, response) => assess(body, response, statuses), { entrypoint: resolve("audit.ts"), github: github.handler });
+    if (statuses.every((status) => status === "not-actionable")) {
+      const preview = await f.run("", [url]);
+      assert.match(preview, /## Review audit · No actionable findings identified/);
+      assert.doesNotMatch(preview, /Reasoning and evidence/);
+    }
     const output = chat
       ? await f.run(`/audit --approve --apply ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
       : await f.run("", ["--approve", "--apply", url]);
@@ -311,7 +340,7 @@ for (const { statuses, approve, chat } of [
     if (approve) {
       assert.equal(github.approvals[0].event, "APPROVE");
       assert.equal(github.approvals[0].commit_id, sha);
-      assert.match(github.approvals[0].body, /Verdict: All actionable findings appear addressed/);
+      assert.match(github.approvals[0].body, /## Review audit · All actionable findings addressed/);
     }
   });
 }
@@ -336,8 +365,8 @@ for (const { flags, status, approve, chat } of [
     const output = await run();
     const preview = output.match(/\[audit:dry-run\] Verdict comment preview:\n\n([\s\S]*?)\n\n\[audit:dry-run\] Comment would/);
     assert.ok(preview, "dry-run must show the exact proposed comment body");
-    assert.ok(preview[1].includes(`Head: ${sha}`));
-    assert.match(preview[1], status === "addressed" ? /Verdict: All actionable findings appear addressed/ : /Verdict: Not all actionable findings are addressed/);
+    assert.ok(preview[1].includes(`audited head: \`${sha}\``));
+    assert.match(preview[1], status === "addressed" ? /## Review audit · All actionable findings addressed/ : /## Review audit · Verification needed/);
     assert.match(output, flags.includes("--comment") ? /Comment would be posted/ : /Comment would not be posted/);
     if (flags.includes("--approve")) {
       assert.match(output, approve ? /PR would be approved/ : /Approval would be skipped/);
