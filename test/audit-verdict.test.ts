@@ -121,15 +121,15 @@ for (const status of ["addressed", "uncertain"] as const) {
     assert.equal(github.approvals.length, 0, "audits must not approve without --approve");
 
     if (status === "addressed") {
-      const firstPost = await f.run("", [url, "--comment"]);
+      const firstPost = await f.run("", [url, "--comment", "--apply"]);
       assert.match(firstPost, /Reusing saved assessment/);
       assert.equal(calls, 1, "output flags must not bypass the assessment cache");
       assert.equal(github.comments.length, 1);
       assert.equal(github.approvals.length, 0, "--comment must not imply --approve");
     }
     const posted = status === "addressed"
-      ? await f.run("", [url, "local/test", "--comment", "--approve"])
-      : await f.run(`/audit --approve --comment --force ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
+      ? await f.run("", [url, "local/test", "--comment", "--approve", "--apply"])
+      : await f.run(`/audit --approve --comment --force --apply ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
     assert.match(posted, verdict);
     assert.match(posted, status === "addressed" ? /Verdict comment updated/ : /Verdict comment posted/);
     assert.equal(github.comments.length, status === "addressed" ? 2 : 1);
@@ -172,12 +172,12 @@ test("sticky comments replace the latest own audit across pages, preview updates
     entrypoint: resolve("audit.ts"), github: github.handler,
   });
 
-  const preview = await f.run("", [url, "--comment", "--dry-run"]);
+  const preview = await f.run("", [url, "--comment"]);
   assert.match(preview, /Comment would be updated/);
   assert.equal(github.comments.length, 0);
   assert.deepEqual(github.issueComments, original, "dry-run must not change existing comments");
 
-  const updated = await f.run("", ["--comment", url]);
+  const updated = await f.run("", ["--comment", "--apply", url]);
   assert.match(updated, /Verdict comment updated/);
   assert.deepEqual(github.updates, [11], "choose the latest created audit, not the latest edited or unrelated comment");
   assert.equal(github.issueComments.length, 5);
@@ -186,17 +186,17 @@ test("sticky comments replace the latest own audit across pages, preview updates
   assert.ok(preview.includes(github.issueComments[1].body), "preview must match the replacement body");
   assert.deepEqual(github.issueComments.filter((comment) => comment.id !== 11), original.filter((comment) => comment.id !== 11));
 
-  await f.run("", ["--sticky=false", "--comment", url, "local/test"]);
+  await f.run("", ["--sticky=false", "--comment", "--apply", url, "local/test"]);
   assert.equal(github.issueComments.length, 6);
   assert.deepEqual(github.updates, [11], "disabling sticky must append even when a matching comment exists");
-  await f.run(`/audit ${url} --comment --sticky false\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
+  await f.run(`/audit ${url} --comment --sticky false --apply\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
   assert.equal(github.issueComments.length, 7, "chat must also support opting out");
   const latest = github.issueComments.at(-1)!;
   latest.body = `An edited audit heading\n\n${marker}`;
   const previousBody = latest.body;
 
   status = "addressed";
-  const replaced = await f.run(`/audit --sticky=true --comment --force ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
+  const replaced = await f.run(`/audit --sticky=true --comment --force --apply ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
   assert.match(replaced, /Verdict comment updated/);
   assert.deepEqual(github.updates, [11, latest.id]);
   assert.equal(github.issueComments.length, 7);
@@ -204,7 +204,7 @@ test("sticky comments replace the latest own audit across pages, preview updates
   assert.match(latest.body, /Verdict: All actionable findings appear addressed/);
   assert.doesNotMatch(latest.body, /Outstanding or uncertain findings/);
 
-  await f.run("", ["--sticky", "--comment", url]);
+  await f.run("", ["--sticky", "--comment", "--apply", url]);
   assert.deepEqual(github.updates, [11, latest.id, latest.id]);
   assert.equal(github.issueComments.length, 7);
 });
@@ -228,7 +228,7 @@ test("verdict comments explain every outstanding or uncertain finding with its s
       ] },
     ] });
   }, { entrypoint: resolve("audit.ts"), github: github.handler });
-  await f.run("", ["--comment", url]);
+  await f.run("", ["--comment", "--apply", url]);
   assert.equal(github.comments.length, 1);
   const body = github.comments[0];
   assert.match(body, /1 addressed · 2 outstanding · 1 uncertain · 1 not-actionable/);
@@ -244,7 +244,7 @@ test("an unstructured final answer cannot bypass complete report validation, pos
   const f = await fixture(t, (_body, response) => reply(response, [{ role: "assistant", content: "Everything is addressed." }]), {
     entrypoint: resolve("audit.ts"), github: github.handler,
   });
-  const { child, done } = f.start(["--comment", "--approve", url]);
+  const { child, done } = f.start(["--comment", "--approve", "--apply", url]);
   child.stdin.end();
   const result = await done;
   assert.equal(result.code, 1);
@@ -263,7 +263,7 @@ for (const action of ["comment", "update", "approve"] as const) {
       calls++;
       assess(body, response);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
-    const { child, done } = f.start([action === "update" ? "--comment" : `--${action}`, url]);
+    const { child, done } = f.start([action === "update" ? "--comment" : `--${action}`, "--apply", url]);
     child.stdin.end();
     const result = await done;
     assert.equal(result.code, 1);
@@ -290,12 +290,12 @@ for (const { statuses, approve, chat } of [
   { statuses: ["not-actionable"], approve: false, chat: false },
   { statuses: [], approve: false, chat: false },
 ] satisfies { statuses: Status[]; approve: boolean; chat: boolean }[]) {
-  test(`--approve ${approve ? "approves" : "skips"} ${statuses.join(" + ") || "an empty audit"} without posting a comment`, { timeout: 20000 }, async (t) => {
+  test(`--approve --apply ${approve ? "approves" : "skips"} ${statuses.join(" + ") || "an empty audit"} without posting a comment`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence({ empty: !statuses.length });
     const f = await fixture(t, (body, response) => assess(body, response, statuses), { entrypoint: resolve("audit.ts"), github: github.handler });
     const output = chat
-      ? await f.run(`/audit --approve ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
-      : await f.run("", ["--approve", url]);
+      ? await f.run(`/audit --approve --apply ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
+      : await f.run("", ["--approve", "--apply", url]);
     assert.equal(github.comments.length, 0, "--approve must not imply --comment");
     assert.equal(github.approvals.length, approve ? 1 : 0);
     assert.match(output, approve ? /PR approved/ : /Approval skipped/);
@@ -311,9 +311,10 @@ for (const { flags, status, approve, chat } of [
   { flags: ["--comment"], status: "addressed", approve: false, chat: false },
   { flags: ["--approve"], status: "addressed", approve: true, chat: true },
   { flags: ["--comment", "--approve"], status: "uncertain", approve: false, chat: false },
+  { flags: ["--comment", "--approve"], status: "addressed", approve: true, chat: false },
   { flags: [], status: "addressed", approve: false, chat: false },
 ] satisfies { flags: string[]; status: Status; approve: boolean; chat: boolean }[]) {
-  test(`--dry-run previews ${flags.join(" ") || "no mutation flags"} without GitHub writes or persisting dry-run intent`, { timeout: 20000 }, async (t) => {
+  test(`default dry-run previews ${flags.join(" ") || "no mutation flags"} (${status}) and requires --apply on every invocation`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence();
     let calls = 0;
     const f = await fixture(t, (body, response) => {
@@ -321,8 +322,8 @@ for (const { flags, status, approve, chat } of [
       assess(body, response, [status]);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
     const run = () => chat
-      ? f.run(`/audit --dry-run ${flags.join(" ")} ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
-      : f.run("", ["--dry-run", ...flags, url, "local/test"]);
+      ? f.run(`/audit ${flags.join(" ")} ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
+      : f.run("", [...flags, url, "local/test"]);
     const output = await run();
     const preview = output.match(/\[audit:dry-run\] Verdict comment preview:\n\n([\s\S]*?)\n\n\[audit:dry-run\] Comment would/);
     assert.ok(preview, "dry-run must show the exact proposed comment body");
@@ -342,24 +343,31 @@ for (const { flags, status, approve, chat } of [
     assert.equal(github.comments.length, 0);
     assert.equal(github.approvals.length, 0, "cached dry-runs must not submit reviews either");
 
-    await f.run("", [...flags, url]);
+    const applied = chat
+      ? await f.run(`/audit --apply ${flags.join(" ")} ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
+      : await f.run("", [...flags, url, "--apply"]);
+    assert.doesNotMatch(applied, /\[audit:dry-run\]/);
     assert.equal(github.comments.length, flags.includes("--comment") ? 1 : 0);
     assert.equal(github.approvals.length, approve ? 1 : 0);
     if (flags.includes("--comment")) assert.equal(github.comments[0], preview[1]);
     if (approve) assert.equal(github.approvals[0].body, preview[1]);
     assert.equal(calls, 1);
+
+    await run();
+    assert.equal(github.comments.length, flags.includes("--comment") ? 1 : 0);
+    assert.equal(github.approvals.length, approve ? 1 : 0, "--apply must not persist to later cached or fresh audits");
   });
 }
 
 for (const revision of ["headSha", "baseSha"] as const) {
-  for (const dryRun of [false, true]) {
-    test(`--approve${dryRun ? " --dry-run" : ""} refuses an otherwise good verdict when ${revision} changes during assessment`, { timeout: 20000 }, async (t) => {
+  for (const apply of [false, true]) {
+    test(`--approve${apply ? " --apply" : ""} refuses an otherwise good verdict when ${revision} changes during assessment`, { timeout: 20000 }, async (t) => {
       const github = githubEvidence();
       const f = await fixture(t, (body, response) => {
         github.state[revision] = "b".repeat(40);
         assess(body, response);
       }, { entrypoint: resolve("audit.ts"), github: github.handler });
-      const { child, done } = f.start(["--approve", ...(dryRun ? ["--dry-run"] : []), url]);
+      const { child, done } = f.start(["--approve", ...(apply ? ["--apply"] : []), url]);
       child.stdin.end();
       const result = await done;
       assert.equal(result.code, 1);

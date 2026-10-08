@@ -166,7 +166,7 @@ export async function fetchReviewSnapshot(target: ReviewTarget): Promise<ReviewS
 // Keep this marker stable across package renames so existing sticky comments remain identifiable.
 export const AUDIT_COMMENT_MARKER = "<!-- pi-durable-demo:review-audit -->";
 
-export async function postReviewComment(target: ReviewTarget, body: string, sticky = true, dryRun = false): Promise<"posted" | "updated"> {
+export async function postReviewComment(target: ReviewTarget, body: string, sticky = true, apply = false): Promise<"posted" | "updated"> {
   const client = github();
   const path = `/repos/${target.owner}/${target.repo}/issues`;
   let existing: RawComment | undefined;
@@ -182,14 +182,14 @@ export async function postReviewComment(target: ReviewTarget, body: string, stic
         || comment.body?.startsWith(`PR review audit · ${target.url}\n\nHead: `)))
       .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "") || b.id - a.id)[0];
   }
-  if (!dryRun) {
+  if (apply) {
     if (existing) await client.request(`${client.base}${path}/comments/${existing.id}`, { body }, "PATCH");
     else await client.request(`${client.base}${path}/${target.pr}/comments`, { body });
   }
   return existing ? "updated" : "posted";
 }
 
-export async function approveReview(snapshot: ReviewSnapshot, body: string, dryRun = false): Promise<void> {
+export async function approveReview(snapshot: ReviewSnapshot, body: string, apply = false): Promise<void> {
   const client = github();
   const { owner, repo, pr } = snapshot.target;
   const path = `${client.base}/repos/${owner}/${repo}/pulls/${pr}`;
@@ -198,7 +198,7 @@ export async function approveReview(snapshot: ReviewSnapshot, body: string, dryR
     throw new Error("PR commits changed since the audit snapshot. No approval was submitted; run the audit again.");
   }
   // Pin the approval even if the head changes between the check and the write.
-  if (!dryRun) await client.request(`${path}/reviews`, { event: "APPROVE", commit_id: snapshot.headSha, body });
+  if (apply) await client.request(`${path}/reviews`, { event: "APPROVE", commit_id: snapshot.headSha, body });
 }
 
 export async function readGithubFile(snapshot: ReviewSnapshot, path: string, revision: "head" | "base", offset: number, limit: number) {

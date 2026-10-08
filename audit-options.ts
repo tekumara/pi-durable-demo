@@ -4,11 +4,11 @@ import { parseReviewTarget } from "./reviews.ts";
 
 const exec = promisify(execFile);
 
-export const AUDIT_CLI_USAGE = "Usage: pronto [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] [<number> | <branch> | <GitHub PR URL>] [provider/model-id]";
+export const AUDIT_CLI_USAGE = "Usage: pronto [--force] [--comment] [--sticky[=true|false]] [--approve] [--apply] [<number> | <branch> | <GitHub PR URL>] [provider/model-id]";
 
 export function parseAuditOptions(args: string[], source: "cli" | "chat") {
-  const usage = source === "cli" ? AUDIT_CLI_USAGE : "Usage: /audit [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL>";
-  const flags = ["--force", "--comment", "--sticky", "--approve", "--dry-run"];
+  const usage = source === "cli" ? AUDIT_CLI_USAGE : "Usage: /audit [--force] [--comment] [--sticky[=true|false]] [--approve] [--apply] <GitHub PR URL>";
+  const flags = ["--force", "--comment", "--sticky", "--approve", "--apply"];
   const supplied = new Set<string>();
   const positional: string[] = [];
   let sticky = true;
@@ -31,7 +31,7 @@ export function parseAuditOptions(args: string[], source: "cli" | "chat") {
   // Chat still requires a URL. Reject malformed URLs before credentials, storage or network access.
   if (source === "chat" || selector.includes("://")) parseReviewTarget(selector);
   return { selector, requested, force: supplied.has("--force"), comment: supplied.has("--comment"), sticky,
-    approve: supplied.has("--approve"), dryRun: supplied.has("--dry-run") };
+    approve: supplied.has("--approve"), apply: supplied.has("--apply") };
 }
 
 export async function resolveAuditUrl(selector: string, cwd: string): Promise<string> {

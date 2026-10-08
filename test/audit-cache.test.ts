@@ -222,7 +222,7 @@ test("invalid audit flags are rejected before audit storage or network access in
   const f = await fixture(t, () => assert.fail("Invalid commands must not reach the model"), { entrypoint: audit, github: github.handler });
   for (const args of [[url, "--froce"], [url, "--force", "--force"],
     [url, "--comment", "--comment"], [url, "--comment=false"], [url, "--approve", "--approve"], [url, "--approve=false"],
-    [url, "--dry-run", "--dry-run"], [url, "--dry-run=false"], [url, "local/test", "extra"],
+    [url, "--apply", "--apply"], [url, "--apply=false"], [url, "--dry-run"], [url, "--apply", "--dry-run"], [url, "local/test", "extra"],
     [url, "--sticky="], [url, "--sticky=maybe"], [url, "--sticky", "--sticky=false"],
     [url, "--sticky=true", "--sticky", "false"]]) {
     const { child, done } = f.start(args);
@@ -232,13 +232,14 @@ test("invalid audit flags are rejected before audit storage or network access in
     assert.match(result.stderr, /Usage:/);
   }
   const { child, done } = f.start([], { entrypoint: chat });
-  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment --comment\n/audit ${url} --approve --approve\n/audit ${url} --dry-run --dry-run\n/audit ${url} --sticky --sticky=false\n/audit ${url} --sticky=maybe\n/quit\n`);
+  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment --comment\n/audit ${url} --approve --approve\n/audit ${url} --apply --apply\n/audit ${url} --dry-run\n/audit ${url} --sticky --sticky=false\n/audit ${url} --sticky=maybe\n/quit\n`);
   const result = await done;
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /--force can be supplied only once/);
   assert.match(result.stderr, /--comment can be supplied only once/);
   assert.match(result.stderr, /--approve can be supplied only once/);
-  assert.match(result.stderr, /--dry-run can be supplied only once/);
+  assert.match(result.stderr, /--apply can be supplied only once/);
+  assert.match(result.stderr, /Unknown audit option: --dry-run/);
   assert.match(result.stderr, /--sticky can be supplied only once/);
   assert.match(result.stderr, /--sticky must be true or false/);
   assert.equal(github.reads(), 0);

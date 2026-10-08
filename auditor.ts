@@ -234,31 +234,32 @@ function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): str
 }
 
 async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: {
-  comment?: boolean; sticky?: boolean; approve?: boolean; dryRun?: boolean;
+  comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
 }): Promise<void> {
   console.log(`\n${formatReport(snapshot, assessments)}\n`);
   const body = formatComment(snapshot, assessments);
-  if (options.dryRun) console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
+  const dryRun = !options.apply;
+  if (dryRun) console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
   // Host-only side effects: never expose writes to the model or replay them through Durable.
   if (options.comment) {
-    const action = await postReviewComment(snapshot.target, body, options.sticky, options.dryRun);
-    console.log(options.dryRun ? `[audit:dry-run] Comment would be ${action}.`
+    const action = await postReviewComment(snapshot.target, body, options.sticky, options.apply);
+    console.log(dryRun ? `[audit:dry-run] Comment would be ${action}.`
       : `[audit] Verdict comment ${action} ${action === "updated" ? "on" : "to"} the PR`);
-  } else if (options.dryRun) console.log("[audit:dry-run] Comment would not be posted (--comment not set).");
+  } else if (dryRun) console.log("[audit:dry-run] Comment would not be posted (--comment not set).");
   if (options.approve) {
     if (!summarizeFindings(assessments).approvable) {
-      console.log(options.dryRun ? "[audit:dry-run] Approval would be skipped: not all actionable findings appear addressed."
+      console.log(dryRun ? "[audit:dry-run] Approval would be skipped: not all actionable findings appear addressed."
         : "[audit] Approval skipped: not all actionable findings appear addressed.");
       return;
     }
-    await approveReview(snapshot, body, options.dryRun);
-    console.log(options.dryRun ? `[audit:dry-run] PR would be approved at ${snapshot.headSha}`
+    await approveReview(snapshot, body, options.apply);
+    console.log(dryRun ? `[audit:dry-run] PR would be approved at ${snapshot.headSha}`
       : `[audit] PR approved at ${snapshot.headSha}`);
   }
 }
 
 export async function runAudit(url: string, options: {
-  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; dryRun?: boolean;
+  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
 }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);
