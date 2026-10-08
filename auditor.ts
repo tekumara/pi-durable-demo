@@ -59,10 +59,27 @@ Use read_review_comment to recover exact evidence if earlier context has been co
 A reply saying "fixed", a resolved thread, an outdated diff hunk, or an approval is not proof of a fix.
 Assess concerns in replies too, and consider later PR-level discussion as possible explanations.
 Separate multiple findings in one comment. For each finding choose:
-- addressed: current code fixes it, or a supported explanation adequately addresses it
-- outstanding: the actionable concern remains
-- uncertain: evidence is insufficient or unreadable
+- addressed: current code fixes it, or an evidence-supported explanation adequately addresses it,
+  including a reasonable scope or trade-off decision
+- outstanding: the actionable concern is neither fixed nor adequately addressed by an explanation
+- uncertain: evidence is insufficient or unreadable to assess the code or explanation
 - not-actionable: praise, boilerplate, summaries without requests, or a duplicate linked to another finding
+Evaluate explanations on their merits, not solely on whether the requested code change is present.
+A supported scope decision identifies the PR's current purpose or audience, accurately describes
+remaining behaviour and relevant mitigations, and gives a reasonable rationale for accepting the
+trade-off or leaving the requested change outside this PR. Verify factual claims against pinned code
+and discussion. Explicitly scoped follow-up work can be part of an adequate explanation, but the
+current rationale must stand on its own without treating the future fix as already implemented.
+For example, shipping first-time-user setup while acknowledging that re-runs overwrite active
+configuration, verifying backups of existing configuration, and explicitly deferring smart merging
+can adequately address a re-run/merge concern through scope and mitigation. Do not automatically
+mark it outstanding solely because merging is absent. Backups do not mean the active files merge.
+Bare acknowledgements, unsupported excuses and unexplained promises to fix later are not enough.
+A substantive unresolved contradiction or concern not covered by the rationale stays outstanding;
+if the supporting evidence cannot be verified, use uncertain. Do not assume reviewer agreement.
+For every addressed finding, say in the reason whether it is addressed by a code fix or by an
+explanation/scope decision. For an explanation, state remaining limitations and deferred work
+truthfully; never imply that the requested behaviour is now implemented.
 Do not mark a substantive finding not-actionable merely because you disagree; evaluate the explanation.
 Missing patches are not evidence of no change. Fetch actual files. Never invent code or evidence links.
 General PR comments have no threaded reply list; an empty replies array proves nothing about responses.
@@ -187,6 +204,7 @@ function formatSummary(snapshot: ReviewSnapshot, assessments: Assessment[]): str
   return [
     `PR review audit · ${snapshot.target.url}`, `Head: ${snapshot.headSha}`, `Evidence fetched: ${snapshot.startedAt} to ${snapshot.fetchedAt}`,
     `Verdict: ${verdict}`, `Findings: ${counts.addressed} addressed · ${counts.outstanding} outstanding · ${counts.uncertain} uncertain · ${counts["not-actionable"]} not-actionable`,
+    "Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.",
     `GitHub: ${resolved}/${inline.length} inline threads resolved (${unknown} unknown). PR-level comments and review summaries have no thread-resolution state.`,
   ];
 }

@@ -2,7 +2,7 @@
 
 A durable PR review auditor built on Pi Durable.
 
-Check whether human and bot review findings on a GitHub pull request have been addressed in the code. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
+Check whether human and bot review findings on a GitHub pull request have been addressed by code changes or supported explanations. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
 
 Audits are read-only by default. When you provide a PR URL, you do not need a local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. Add `--apply` with `--comment` or `--approve` to write to GitHub. Without `--apply`, Pronto previews the selected actions only.
 
@@ -60,6 +60,16 @@ The terminal report lists each comment and its findings as `addressed`, `outstan
 
 The audit checks whether existing review findings have been addressed. It is not a general code review or proof that the PR is correct.
 
+### What addressed means
+
+`addressed` can mean a code fix or an adequate, evidence-supported explanation. A reasonable scope or trade-off decision can address a finding without implementing the requested change.
+
+A supported scope decision explains the PR's current purpose or audience, its remaining behaviour and relevant mitigations, and why the trade-off is reasonable. The auditor checks factual claims against the pinned code and discussion. Follow-up work can be explicitly deferred, but the current rationale must stand on its own. A future fix is not a current fix.
+
+For example, a setup PR for first-time users can explain that re-runs overwrite active configuration, preserve backups, and leave smart merging to follow-up work. If the code supports those claims and the scope rationale adequately addresses the concern, the finding can be `addressed` through explanation. This does not mean configuration now merges. The finding's reason must identify the explanation and describe the remaining limitation and deferred work.
+
+Bare acknowledgements, unsupported excuses and unexplained promises to fix later do not qualify. An unresolved substantive contradiction or concern outside the rationale remains `outstanding`. Evidence that cannot be verified leads to `uncertain`. An adequate explanation does not establish reviewer agreement or GitHub thread resolution.
+
 ## Optional GitHub comments and approvals
 
 ### Post a verdict comment
@@ -82,6 +92,8 @@ Evidence fetched: 2026-06-01T12:00:00.000Z to 2026-06-01T12:00:03.000Z
 Verdict: Not all actionable findings are addressed.
 
 Findings: 4 addressed · 1 outstanding · 1 uncertain · 2 not-actionable
+
+Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.
 
 GitHub: 3/5 inline threads resolved (0 unknown). PR-level comments and review summaries have no thread-resolution state.
 
@@ -108,7 +120,7 @@ Evidence:
 This is the agent's assessment of a saved snapshot, not proof of correctness or the PR's current live state.
 ```
 
-The comment includes details only for `outstanding` and `uncertain` findings. If there are none, it contains the summary only. The terminal report retains explanations and evidence for all findings.
+The comment includes details only for `outstanding` and `uncertain` findings. If there are none, it contains the summary only. Both the terminal report and comment explain that `addressed` includes supported explanations and scope decisions, not just code fixes. The terminal report retains explanations and evidence for all findings.
 
 `--comment` defaults to false. Without `--apply`, it previews the comment without posting it. Both flags can appear before or after the target or CLI model argument, and you can combine them with `--force`. Your GitHub token needs permission to create and edit PR comments.
 
@@ -134,7 +146,7 @@ Add `--apply --approve` to submit a GitHub approval review only when the verdict
 pronto --apply --approve https://github.com/owner/repo/pull/42
 ```
 
-`--approve` defaults to false. Without `--apply`, it previews the approval decision without submitting a review. Approval requires at least one `addressed` finding and no `outstanding` or `uncertain` findings. Audits with only `not-actionable` findings, or no findings, skip approval. A skipped approval is not an operational failure.
+`--approve` defaults to false. Without `--apply`, it previews the approval decision without submitting a review. Approval requires at least one `addressed` finding and no `outstanding` or `uncertain` findings. Audits with only `not-actionable` findings, or no findings, skip approval. Supported explanations and scope decisions count as `addressed` for this rule; approval does not imply every requested code change was implemented. A skipped approval is not an operational failure.
 
 With `--apply`, the host submits the approval after a complete, validated assessment, including a cache hit. It rechecks the PR's head and base SHAs before approving and stops if either differs from the saved snapshot. The review is pinned to the audited head SHA and includes the same summary as a verdict comment. Approval assesses the supplied review findings, not the PR's overall correctness or CI status.
 
@@ -331,7 +343,7 @@ npm run check
 npm test
 ```
 
-The tests verify that `npm link` exposes the source-backed `pronto` command from another directory. They use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, default dry-run previews and per-invocation `--apply` consent for GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and controller-schema migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Storage tests cover path precedence, private permissions, shared audit history, isolated chats, process locks and ignoring directory-local databases. Tests use temporary state directories and do not contact a real model provider or GitHub.
+The tests verify that `npm link` exposes the source-backed `pronto` command from another directory. They use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, default dry-run previews and per-invocation `--apply` consent for GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and controller-schema migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Storage tests cover path precedence, private permissions, shared audit history, isolated chats, process locks and ignoring directory-local databases. Tests use temporary state directories and do not contact a real model provider or GitHub. Supplied model verdicts test report rendering, validation and action rules, not the model's ability to judge whether a scope explanation is adequate.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 

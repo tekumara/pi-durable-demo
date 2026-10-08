@@ -6,6 +6,8 @@ import { fixture, reply, tool, type Request } from "./fixtures.ts";
 
 // A small external fixture isolates the final verdict rule: an open GitHub thread
 // can be addressed, but uncertainty alone must prevent an all-addressed verdict.
+// Model verdicts are supplied fixtures: these tests cover output and action contracts,
+// not whether a real model judges an explanation adequate.
 const url = "https://github.com/acme/demo/pull/8";
 const sha = "a".repeat(40);
 const evidenceUrl = `${url}#discussion_r1`;
@@ -117,6 +119,12 @@ for (const status of ["addressed", "uncertain"] as const) {
     const output = await f.run("", [url]);
     assert.match(output, verdict);
     assert.match(output, /GitHub: 0\/1 inline threads resolved/);
+    const preview = output.split("[audit:dry-run] Verdict comment preview:\n\n");
+    assert.equal(preview.length, 2);
+    for (const report of preview) {
+      assert.match(report, /Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change\./);
+    }
+    if (status === "addressed") assert.match(preview[0], /addressed: Requested explanation\n  The reply explains the intentional behaviour\./);
     assert.equal(github.comments.length, 0, "audits must not post without --comment");
     assert.equal(github.approvals.length, 0, "audits must not approve without --approve");
 
@@ -137,6 +145,7 @@ for (const status of ["addressed", "uncertain"] as const) {
     assert.ok(github.comments[0].includes(`Head: ${sha}`));
     assert.match(github.comments[0], status === "addressed" ? /1 addressed · 0 outstanding · 0 uncertain/ : /0 addressed · 0 outstanding · 1 uncertain/);
     assert.match(github.comments[0], /saved snapshot, not proof/);
+    assert.match(github.comments[0], /Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change\./);
     if (status === "addressed") {
       assert.equal(github.issueComments.length, 1, "repeated posting must update rather than append");
       assert.deepEqual(github.updates, [github.issueComments[0].id]);
