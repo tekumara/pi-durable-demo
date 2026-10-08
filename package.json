@@ -1,11 +1,14 @@
 {
-  "name": "pi-durable-demo",
+  "name": "pronto",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "A minimal terminal coding agent built on Pi Durable.",
+  "description": "A durable GitHub PR review auditor built on Pi Durable.",
   "engines": {
     "node": ">=22.19.0"
+  },
+  "bin": {
+    "pronto": "audit.ts"
   },
   "scripts": {
     "start": "node --experimental-strip-types agent.ts",

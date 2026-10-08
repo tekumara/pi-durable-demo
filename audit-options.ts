@@ -1,6 +1,6 @@
 import { parseReviewTarget } from "./reviews.ts";
 
-export const AUDIT_CLI_USAGE = "Usage: npm run audit -- [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL> [provider/model-id]";
+export const AUDIT_CLI_USAGE = "Usage: pronto [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL> [provider/model-id]";
 
 export function parseAuditOptions(args: string[], source: "cli" | "chat") {
   const usage = source === "cli" ? AUDIT_CLI_USAGE : "Usage: /audit [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL>";

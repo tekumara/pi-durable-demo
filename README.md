@@ -1,4 +1,6 @@
-# Pi Durable PR auditor
+# Pronto
+
+A durable PR review auditor built on Pi Durable.
 
 Check whether human and bot review findings on a GitHub pull request have been addressed in the code. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
 
@@ -14,13 +16,18 @@ Authenticate with `gh auth login`, `GITHUB_TOKEN`, or `GH_TOKEN`. Your GitHub to
 
 ```sh
 npm install --ignore-scripts
-npm run audit -- https://github.com/owner/repo/pull/42
+npm link --ignore-scripts
+pronto https://github.com/owner/repo/pull/42
 ```
+
+Run `npm link --ignore-scripts` from this repository to install the global `pronto` command as a symlink to the source. Changes here take effect immediately, with no build or reinstall. You can run `pronto` from any directory; audit storage stays in the directory where you invoke it. Run `npm unlink --global pronto` to remove the link.
+
+You can also run the CLI without a global link using `npm run audit -- <GitHub PR URL>` from this repository.
 
 The auditor uses your saved Pi default model, or the first available model if there is no usable default. Choose a specific model by adding `provider/model-id` after the URL:
 
 ```sh
-npm run audit -- https://github.com/owner/repo/pull/42 provider/model-id
+pronto https://github.com/owner/repo/pull/42 provider/model-id
 ```
 
 Use a provider and model listed by Pi's `/model` command. The one-shot CLI is in [`audit.ts`](audit.ts).
@@ -48,7 +55,7 @@ The audit checks whether existing review findings have been addressed. It is not
 Add `--comment` to post the verdict, finding counts, audited head SHA and evidence fetch window as a general PR comment. It also explains each outstanding or uncertain finding, with links to the original comment and supporting evidence:
 
 ```sh
-npm run audit -- --comment https://github.com/owner/repo/pull/42
+pronto --comment https://github.com/owner/repo/pull/42
 ```
 
 Example comment:
@@ -98,7 +105,7 @@ Comments are sticky by default (`--sticky=true`). Each invocation updates the la
 To create a new comment every time, set `--sticky=false`:
 
 ```sh
-npm run audit -- --comment --sticky=false https://github.com/owner/repo/pull/42
+pronto --comment --sticky=false https://github.com/owner/repo/pull/42
 ```
 
 You can also write `--sticky false`. A bare `--sticky`, `--sticky true` or `--sticky=true` enables sticky updates. The flag does not imply `--comment` or change approval behaviour. If several audit comments already exist, only the latest created one is updated; older comments remain.
@@ -112,7 +119,7 @@ GitHub writes are not replayed by Durable, and the flags do not persist across i
 Add `--approve` to submit a GitHub approval review only when the verdict is "All actionable findings appear addressed":
 
 ```sh
-npm run audit -- --approve https://github.com/owner/repo/pull/42
+pronto --approve https://github.com/owner/repo/pull/42
 ```
 
 The flag defaults to false. Approval requires at least one `addressed` finding and no `outstanding` or `uncertain` findings. Audits with only `not-actionable` findings, or no findings, skip approval. A skipped approval is not an operational failure.
@@ -122,7 +129,7 @@ The host submits the approval after a complete, validated assessment, including 
 `--approve` does not imply `--comment`. You can enable either or both, and combine them with `--force`:
 
 ```sh
-npm run audit -- --comment --approve https://github.com/owner/repo/pull/42
+pronto --comment --approve https://github.com/owner/repo/pull/42
 ```
 
 With both flags, the host posts the comment first, then submits the approval if the verdict allows it. Your GitHub token needs permission to submit PR reviews. GitHub does not allow authors to approve their own PRs.
@@ -134,7 +141,7 @@ Approvals are not replayed by Durable, and the flag does not persist across invo
 Add `--dry-run` to show the exact comment body without writing to GitHub. Combine it with `--comment` to preview posting, and `--approve` to show whether the verdict permits approval:
 
 ```sh
-npm run audit -- --dry-run --comment --approve https://github.com/owner/repo/pull/42
+pronto --dry-run --comment --approve https://github.com/owner/repo/pull/42
 ```
 
 The normal report is followed by a labelled comment preview and the planned actions. With sticky comments enabled, the preview looks up the latest matching audit comment and reports whether it would be updated or created. For an addressed verdict with no existing audit comment, the action preview looks like this:
@@ -191,7 +198,7 @@ Snapshot IDs, fetch times and collection order do not affect the fingerprint. Ma
 To request a new assessment, use `--force`:
 
 ```sh
-npm run audit -- --force https://github.com/owner/repo/pull/42
+pronto --force https://github.com/owner/repo/pull/42
 ```
 
 The flag can appear before or after the URL or CLI model argument. It bypasses the cache. If an audit is unfinished, it cancels that attempt and starts again with fresh evidence. The controller saves its restart intent and selected model before cancelling or fetching. Once saved, they survive interruption before the new snapshot is admitted. Once that snapshot is saved, a normal invocation resumes the new attempt. Repeating `--force` deliberately restarts again.
@@ -248,7 +255,7 @@ To use the coding chat in another project, run the script from that directory:
 
 ```sh
 cd /path/to/project
-node --experimental-strip-types /path/to/pi-durable-demo/agent.ts
+node --experimental-strip-types /path/to/pronto/agent.ts
 ```
 
 ### Chat tools and safety
@@ -274,7 +281,7 @@ npm run check
 npm test
 ```
 
-The tests use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
+The tests verify that `npm link` exposes the source-backed `pronto` command from another directory. They use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 

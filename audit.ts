@@ -1,3 +1,4 @@
+#!/usr/bin/env -S node --experimental-strip-types
 import { runAudit } from "./auditor.ts";
 import { createModelRuntime } from "./model.ts";
 import { AUDIT_CLI_USAGE, parseAuditOptions } from "./audit-options.ts";

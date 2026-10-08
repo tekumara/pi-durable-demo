@@ -163,6 +163,7 @@ export async function fetchReviewSnapshot(target: ReviewTarget): Promise<ReviewS
   };
 }
 
+// Keep this marker stable across package renames so existing sticky comments remain identifiable.
 export const AUDIT_COMMENT_MARKER = "<!-- pi-durable-demo:review-audit -->";
 
 export async function postReviewComment(target: ReviewTarget, body: string, sticky = true, dryRun = false): Promise<"posted" | "updated"> {
