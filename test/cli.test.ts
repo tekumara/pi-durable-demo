@@ -35,7 +35,9 @@ async function selectionFixture(t: TestContext) {
       assert.equal(request.method, request.url === "/github/graphql" ? "POST" : "GET");
       const path = request.url!.split("?")[0];
       let data: unknown;
-      if (path === "/github/repos/acme/demo/pulls/7") {
+      if (path === "/github/user") {
+        data = { login: "auditor" };
+      } else if (path === "/github/repos/acme/demo/pulls/7") {
         data = { title: "Selected PR", body: "", changed_files: 0,
           head: { sha: "a".repeat(40), repo: { full_name: "acme/demo" } },
           base: { sha: "b".repeat(40), repo: { full_name: "acme/demo" } } };
@@ -54,7 +56,7 @@ async function selectionFixture(t: TestContext) {
 
 for (const { name, args, selector } of [
   { name: "current branch", args: [], selector: undefined },
-  { name: "current branch with flags only", args: ["--force", "--comment", "--approve", "--sticky=false"], selector: undefined },
+  { name: "current branch with flags only", args: ["--force", "--approve", "--sticky=false"], selector: undefined },
   { name: "explicit branch and model", args: ["feature/pr-inference", "local/test", "--force"], selector: "feature/pr-inference" },
   { name: "fork branch", args: ["contributor:feature/pr-inference"], selector: "contributor:feature/pr-inference" },
   { name: "branch containing shell metacharacters", args: ["feature/with;$value"], selector: "feature/with;$value" },

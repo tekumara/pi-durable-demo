@@ -30,6 +30,7 @@ function evidence() {
     });
     let data: unknown;
     switch (path) {
+      case "/github/user": data = { login: "auditor" }; break;
       case "/github/repos/acme/project/pulls/9":
         data = { title: state.title, body: state.description, html_url: url, changed_files: 0,
           head: { sha: state.headSha, repo: { full_name: "acme/project" } },
@@ -234,7 +235,7 @@ test("invalid audit flags are rejected before audit storage or network access in
   const github = evidence();
   const f = await fixture(t, () => assert.fail("Invalid commands must not reach the model"), { entrypoint: audit, github: github.handler });
   for (const args of [[url, "--froce"], [url, "--force", "--force"],
-    [url, "--comment", "--comment"], [url, "--comment=false"], [url, "--approve", "--approve"], [url, "--approve=false"],
+    [url, "--comment"], [url, "--approve", "--approve"], [url, "--approve=false"],
     [url, "--apply", "--apply"], [url, "--apply=false"], [url, "--dry-run"], [url, "--apply", "--dry-run"], [url, "local/test", "extra"],
     [url, "--sticky="], [url, "--sticky=maybe"], [url, "--sticky", "--sticky=false"],
     [url, "--sticky=true", "--sticky", "false"]]) {
@@ -245,11 +246,11 @@ test("invalid audit flags are rejected before audit storage or network access in
     assert.match(result.stderr, /Usage:/);
   }
   const { child, done } = f.start([], { entrypoint: chat });
-  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment --comment\n/audit ${url} --approve --approve\n/audit ${url} --apply --apply\n/audit ${url} --dry-run\n/audit ${url} --sticky --sticky=false\n/audit ${url} --sticky=maybe\n/quit\n`);
+  child.stdin.end(`/audit ${url} --force --force\n/audit ${url} --comment\n/audit ${url} --approve --approve\n/audit ${url} --apply --apply\n/audit ${url} --dry-run\n/audit ${url} --sticky --sticky=false\n/audit ${url} --sticky=maybe\n/quit\n`);
   const result = await done;
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /--force can be supplied only once/);
-  assert.match(result.stderr, /--comment can be supplied only once/);
+  assert.match(result.stderr, /Unknown audit option: --comment/);
   assert.match(result.stderr, /--approve can be supplied only once/);
   assert.match(result.stderr, /--apply can be supplied only once/);
   assert.match(result.stderr, /Unknown audit option: --dry-run/);

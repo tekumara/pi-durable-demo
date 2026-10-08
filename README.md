@@ -4,7 +4,7 @@ A durable PR review auditor built on Pi Durable.
 
 Check whether human and bot review findings on a GitHub pull request have been addressed by code changes or supported explanations. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
 
-Audits are read-only by default. When you provide a PR URL, you do not need a local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. Add `--apply` with `--comment` or `--approve` to write to GitHub. Without `--apply`, Pronto previews the selected actions only.
+Audits are read-only by default. When you provide a PR URL, you do not need a local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. Add `--apply` to post the verdict comment; add `--approve` as well to submit an approval when the verdict allows it. Without `--apply`, Pronto previews the comment and any selected approval.
 
 For ongoing coding tasks, an [optional interactive chat](#optional-interactive-chat) is also available.
 
@@ -26,8 +26,7 @@ From a Git checkout, omit the target to audit the current branch's PR. You can a
 
 ```sh
 pronto
-pronto --comment
-pronto --apply --comment
+pronto --apply
 pronto feature/my-change
 pronto 42
 ```
@@ -74,10 +73,10 @@ Bare acknowledgements, unsupported excuses and unexplained promises to fix later
 
 ### Post a verdict comment
 
-Add `--apply --comment` to post a compact audit comment. It shows the verdict, finding counts, and each outstanding or uncertain finding with its next step and original review link. Reasoning, evidence links and audit metadata sit in collapsed GitHub Markdown sections:
+Add `--apply` to post a compact audit comment. It shows the verdict, finding counts, and each outstanding or uncertain finding with its next step and original review link. Reasoning, evidence links and audit metadata sit in collapsed GitHub Markdown sections:
 
 ```sh
-pronto --apply --comment https://github.com/owner/repo/pull/42
+pronto --apply https://github.com/owner/repo/pull/42
 ```
 
 Example comment:
@@ -144,17 +143,17 @@ The headline is “Changes needed” when findings remain outstanding, or “Ver
 
 Outstanding findings appear before uncertain findings. Only their reasoning and evidence appear in the first collapsed section. If there are none, that section is omitted. Audit context remains available, including the audited head, fetch window, thread-resolution counts, non-actionable count and meaning of `addressed`. Saved assessments without a specific next step use a generic action for their status. The terminal report retains explanations and evidence for all findings.
 
-`--comment` defaults to false. Without `--apply`, it previews the comment without posting it. Both flags can appear before or after the target or CLI model argument, and you can combine them with `--force`. Your GitHub token needs permission to create and edit PR comments.
+The verdict comment is previewed by default. With `--apply`, Pronto posts it. `--apply` can appear before or after the target or CLI model argument, and you can combine it with `--force`. Your GitHub token needs permission to create and edit PR comments.
 
-Comments are sticky by default (`--sticky=true`). Each invocation with `--apply --comment` updates the latest audit comment posted by your authenticated GitHub account, or creates one if none exists. Other accounts' comments and your unrelated comments are left unchanged. New audit comments include a hidden marker; older verdict comments are recognised by their audit heading.
+Comments are sticky by default (`--sticky=true`). Each invocation with `--apply` updates the latest audit comment posted by your authenticated GitHub account, or creates one if none exists. Other accounts' comments and your unrelated comments are left unchanged. New audit comments include a hidden marker; older verdict comments are recognised by their audit heading.
 
 To create a new comment every time, set `--sticky=false`:
 
 ```sh
-pronto --apply --comment --sticky=false https://github.com/owner/repo/pull/42
+pronto --apply --sticky=false https://github.com/owner/repo/pull/42
 ```
 
-You can also write `--sticky false`. A bare `--sticky`, `--sticky true` or `--sticky=true` enables sticky updates. The flag does not imply `--comment` or change approval behaviour. If several audit comments already exist, only the latest created one is updated; older comments remain.
+You can also write `--sticky false`. A bare `--sticky`, `--sticky true` or `--sticky=true` enables sticky updates. The flag only controls whether the verdict comment is updated or newly created; it does not change approval behaviour. If several audit comments already exist, only the latest created one is updated; older comments remain.
 
 With `--apply`, the host posts or updates only after a complete, validated assessment, including a cache hit. It looks up live comments even when the assessment uses a saved snapshot. The model remains read-only. Creating or changing a comment changes the PR discussion and invalidates the evidence cache on the next audit.
 
@@ -162,7 +161,7 @@ GitHub writes are not replayed by Durable, and the flags do not persist across i
 
 ### Approve when findings are addressed
 
-Add `--apply --approve` to submit a GitHub approval review only when the verdict is "All actionable findings appear addressed":
+Add `--apply --approve` to post the verdict comment and submit a GitHub approval review only when the verdict is "All actionable findings appear addressed":
 
 ```sh
 pronto --apply --approve https://github.com/owner/repo/pull/42
@@ -172,22 +171,16 @@ pronto --apply --approve https://github.com/owner/repo/pull/42
 
 With `--apply`, the host submits the approval after a complete, validated assessment, including a cache hit. It rechecks the PR's head and base SHAs before approving and stops if either differs from the saved snapshot. The review is pinned to the audited head SHA and includes the same summary as a verdict comment. Approval assesses the supplied review findings, not the PR's overall correctness or CI status.
 
-`--approve` does not imply `--comment`. Select either or both, add `--apply` to perform them, and optionally combine them with `--force`:
+With `--apply --approve`, the host posts the comment first, then submits the approval if the verdict allows it. Your GitHub token needs permission to submit PR reviews. GitHub does not allow authors to approve their own PRs.
 
-```sh
-pronto --apply --comment --approve https://github.com/owner/repo/pull/42
-```
-
-With both action flags and `--apply`, the host posts the comment first, then submits the approval if the verdict allows it. Your GitHub token needs permission to submit PR reviews. GitHub does not allow authors to approve their own PRs.
-
-Approvals are not replayed by Durable, and the flag does not persist across invocations. Approval errors exit 1 but retain the completed assessment. A comment already posted by `--apply --comment` remains if approval fails. Check the PR before retrying after an interruption or ambiguous network failure.
+Approvals are not replayed by Durable, and the flag does not persist across invocations. Approval errors exit 1 but retain the completed assessment. A comment already posted by `--apply` remains if approval fails. Check the PR before retrying after an interruption or ambiguous network failure.
 
 ### Preview comments and approvals
 
-Audits run in dry-run mode by default. They show the exact comment body without writing to GitHub. Add `--comment` to preview posting, and `--approve` to show whether the verdict permits approval:
+Audits run in dry-run mode by default. They show the exact comment body without writing to GitHub. Add `--approve` to preview whether the verdict permits approval:
 
 ```sh
-pronto --comment --approve https://github.com/owner/repo/pull/42
+pronto --approve https://github.com/owner/repo/pull/42
 ```
 
 The normal report is followed by a labelled comment preview and the planned actions. With sticky comments enabled, the preview looks up the latest matching audit comment and reports whether it would be updated or created. For an addressed verdict with no existing audit comment, the action preview looks like this:
@@ -202,12 +195,12 @@ For an outstanding, uncertain or no-actionable-findings verdict, the approval pr
 To perform the selected actions, add `--apply`:
 
 ```sh
-pronto --apply --comment --approve https://github.com/owner/repo/pull/42
+pronto --apply --approve https://github.com/owner/repo/pull/42
 ```
 
-`--apply` defaults to false and does not imply `--comment` or `--approve`. Without it, no comments or reviews are created or updated, even when both action flags are set. `--apply` alone performs no GitHub writes. The flag does not persist across invocations; every invocation that writes must include it.
+`--apply` defaults to false. When supplied, it posts or updates the verdict comment; with `--approve`, it also submits an approval if the verdict permits one. Without `--apply`, no comments or reviews are created or updated. The flag does not persist across invocations; every invocation that writes must include it.
 
-With no action flags, the default preview shows the comment body but says it would not be posted. A preview does not test GitHub write permissions or reviewer restrictions. The former `--dry-run` flag has been removed; omit `--apply` to preview.
+With no action flags, the default preview shows the comment body and says it would be posted if you add `--apply`. A preview does not test GitHub write permissions or reviewer restrictions. The former `--dry-run` flag has been removed; omit `--apply` to preview.
 
 The audit otherwise runs normally: it fetches evidence, may call the model, saves its assessment and uses the cache. Dry-run mode prevents GitHub writes, not local storage writes or model requests. You can combine previews with `--force` to reassess fresh evidence.
 
@@ -333,7 +326,7 @@ You can invoke the same PR auditor from chat:
 /audit https://github.com/owner/repo/pull/42
 ```
 
-The command supports the same `--force`, `--comment`, `--sticky`, `--approve`, and `--apply` flags described above. Chat audits also preview by default and require `--apply` for GitHub writes. Chat audits use the chat's model and separate audit storage. They do not replace the coding conversation or its tools.
+The command supports the same `--force`, `--sticky`, `--approve`, and `--apply` flags described above. Chat audits also preview by default and require `--apply` to post the verdict comment or submit an approval. Chat audits use the chat's model and separate audit storage. They do not replace the coding conversation or its tools.
 
 To use the coding chat in another project, run the script from that directory:
 

@@ -45,7 +45,9 @@ function githubEvidence(options: { moved?: boolean; incompleteFiles?: boolean } 
       return;
     }
     assert.equal(request.method, "GET", "auditor must never mutate GitHub");
-    if (url.pathname === "/github/repos/acme/demo/pulls/7") {
+    if (url.pathname === "/github/user") {
+      json({ login: "auditor" });
+    } else if (url.pathname === "/github/repos/acme/demo/pulls/7") {
       json({ title: "Access checks", body: "Review this change", changed_files: options.incompleteFiles ? 3 : 2,
         head: { sha: options.moved && ++prRequests > 1 ? "c".repeat(40) : headSha, repo: { full_name: "contributor/fork" } },
         base: { sha: baseSha, repo: { full_name: "acme/demo" } },

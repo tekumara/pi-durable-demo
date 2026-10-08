@@ -281,18 +281,16 @@ function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): str
 }
 
 async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: {
-  comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
+  sticky?: boolean; approve?: boolean; apply?: boolean;
 }): Promise<void> {
   console.log(`\n${formatReport(snapshot, assessments)}\n`);
   const body = formatComment(snapshot, assessments);
   const dryRun = !options.apply;
   if (dryRun) console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
   // Host-only side effects: never expose writes to the model or replay them through Durable.
-  if (options.comment) {
-    const action = await postReviewComment(snapshot.target, body, options.sticky, options.apply);
-    console.log(dryRun ? `[audit:dry-run] Comment would be ${action}.`
-      : `[audit] Verdict comment ${action} ${action === "updated" ? "on" : "to"} the PR`);
-  } else if (dryRun) console.log("[audit:dry-run] Comment would not be posted (--comment not set).");
+  const action = await postReviewComment(snapshot.target, body, options.sticky, options.apply);
+  console.log(dryRun ? `[audit:dry-run] Comment would be ${action}.`
+    : `[audit] Verdict comment ${action} ${action === "updated" ? "on" : "to"} the PR`);
   if (options.approve) {
     if (!summarizeFindings(assessments).approvable) {
       console.log(dryRun ? "[audit:dry-run] Approval would be skipped: not all actionable findings appear addressed."
@@ -306,7 +304,7 @@ async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[],
 }
 
 export async function runAudit(url: string, options: {
-  models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
+  models: ModelRuntime; model: ModelRef; force?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
 }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);
