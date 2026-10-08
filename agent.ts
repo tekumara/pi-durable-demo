@@ -109,7 +109,7 @@ async function main() {
       if (content === "/quit") break;
       if (/^\/audit(?:\s|$)/.test(content)) {
         try {
-          const { url, force, comment, sticky, approve, dryRun } = parseAuditOptions(content.slice("/audit".length).trim().split(/\s+/).filter(Boolean), "chat");
+          const { selector: url, force, comment, sticky, approve, dryRun } = parseAuditOptions(content.slice("/audit".length).trim().split(/\s+/).filter(Boolean), "chat");
           await runAudit(url, { cwd, models, model: agent.model!, force, comment, sticky, approve, dryRun });
         } catch (error) {
           console.error(error instanceof Error ? error.message : error);

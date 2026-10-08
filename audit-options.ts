@@ -1,6 +1,10 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { parseReviewTarget } from "./reviews.ts";
 
-export const AUDIT_CLI_USAGE = "Usage: pronto [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL> [provider/model-id]";
+const exec = promisify(execFile);
+
+export const AUDIT_CLI_USAGE = "Usage: pronto [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] [<number> | <branch> | <GitHub PR URL>] [provider/model-id]";
 
 export function parseAuditOptions(args: string[], source: "cli" | "chat") {
   const usage = source === "cli" ? AUDIT_CLI_USAGE : "Usage: /audit [--force] [--comment] [--sticky[=true|false]] [--approve] [--dry-run] <GitHub PR URL>";
@@ -22,9 +26,29 @@ export function parseAuditOptions(args: string[], source: "cli" | "chat") {
       sticky = value === "true";
     }
   }
-  if (!positional.length || positional.length > (source === "cli" ? 2 : 1)) throw new Error(usage);
-  const [url, requested] = positional;
-  parseReviewTarget(url); // Reject malformed commands before credentials, storage or network access.
-  return { url, requested, force: supplied.has("--force"), comment: supplied.has("--comment"), sticky,
+  if ((source === "chat" && !positional.length) || positional.length > (source === "cli" ? 2 : 1)) throw new Error(usage);
+  const [selector = "", requested] = positional;
+  // Chat still requires a URL. Reject malformed URLs before credentials, storage or network access.
+  if (source === "chat" || selector.includes("://")) parseReviewTarget(selector);
+  return { selector, requested, force: supplied.has("--force"), comment: supplied.has("--comment"), sticky,
     approve: supplied.has("--approve"), dryRun: supplied.has("--dry-run") };
+}
+
+export async function resolveAuditUrl(selector: string, cwd: string): Promise<string> {
+  if (selector.includes("://")) return parseReviewTarget(selector).url;
+  let stdout: string;
+  try {
+    // Leave omitted selectors omitted: gh's PR finder resolves tracking refs, push config and fork owners.
+    // https://github.com/cli/cli/blob/v2.100.0/pkg/cmd/pr/shared/finder.go
+    ({ stdout } = await exec("gh", ["pr", "view", ...(selector ? [selector] : []), "--json", "url", "--jq", ".url"], {
+      cwd, timeout: 30_000,
+    }));
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string };
+    if (failure.code === "ENOENT") {
+      throw new Error("GitHub CLI (gh) is required to infer a PR or select one by branch or number. Install gh or provide a GitHub PR URL.", { cause: error });
+    }
+    throw new Error(failure.stderr?.trim() || failure.message, { cause: error });
+  }
+  return parseReviewTarget(stdout.trim()).url;
 }

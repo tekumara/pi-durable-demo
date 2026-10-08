@@ -4,7 +4,7 @@ A durable PR review auditor built on Pi Durable.
 
 Check whether human and bot review findings on a GitHub pull request have been addressed in the code. The auditor compares review discussions with code at pinned commits and reports which findings are addressed, outstanding, uncertain or not actionable.
 
-Audits are read-only by default and need no local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. You can opt in to posting a verdict comment or approving a PR when all actionable findings appear addressed.
+Audits are read-only by default. When you provide a PR URL, you do not need a local checkout. Pi Durable saves the evidence and assessment in SQLite, resumes interrupted audits and reuses assessments when the evidence is unchanged. You can opt in to posting a verdict comment or approving a PR when all actionable findings appear addressed.
 
 For ongoing coding tasks, an [optional interactive chat](#optional-interactive-chat) is also available.
 
@@ -22,15 +22,26 @@ pronto https://github.com/owner/repo/pull/42
 
 Run `npm link --ignore-scripts` from this repository to install the global `pronto` command as a symlink to the source. Changes here take effect immediately, with no build or reinstall. You can run `pronto` from any directory; audit storage stays in the directory where you invoke it. Run `npm unlink --global pronto` to remove the link.
 
-You can also run the CLI without a global link using `npm run audit -- <GitHub PR URL>` from this repository.
+From a Git checkout, omit the target to audit the current branch's PR. You can also select a PR by branch name or number:
 
-The auditor uses your saved Pi default model, or the first available model if there is no usable default. Choose a specific model by adding `provider/model-id` after the URL:
+```sh
+pronto
+pronto --dry-run --comment
+pronto feature/my-change
+pronto 42
+```
+
+These forms require the GitHub CLI (`gh`). Pronto runs `gh pr view` in your current directory, using the same repository, PR tracking ref, push configuration and fork selection rules as [gh's PR finder](https://github.com/cli/cli/blob/v2.100.0/pkg/cmd/pr/shared/finder.go). If selection fails, the command exits before starting an audit. An explicit PR URL does not require `gh` when you provide a token.
+
+You can also run the CLI without a global link using `npm run audit -- [<number> | <branch> | <GitHub PR URL>]` from this repository.
+
+The auditor uses your saved Pi default model, or the first available model if there is no usable default. Choose a specific model by adding `provider/model-id` after an explicit target:
 
 ```sh
 pronto https://github.com/owner/repo/pull/42 provider/model-id
 ```
 
-Use a provider and model listed by Pi's `/model` command. The one-shot CLI is in [`audit.ts`](audit.ts).
+A single positional argument is always a PR target, so branch names such as `feature/my-change` are not mistaken for models. Use a provider and model listed by Pi's `/model` command. The one-shot CLI is in [`audit.ts`](audit.ts).
 
 ## How the audit works
 

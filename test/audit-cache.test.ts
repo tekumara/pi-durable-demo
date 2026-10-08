@@ -220,10 +220,10 @@ test("chat --force bypasses a completed cache entry", { timeout: 20_000 }, async
 test("invalid audit flags are rejected before audit storage or network access in CLI and chat", { timeout: 20_000 }, async (t) => {
   const github = evidence();
   const f = await fixture(t, () => assert.fail("Invalid commands must not reach the model"), { entrypoint: audit, github: github.handler });
-  for (const args of [["--force"], ["--comment"], ["--approve"], ["--dry-run"], [url, "--froce"], [url, "--force", "--force"],
+  for (const args of [[url, "--froce"], [url, "--force", "--force"],
     [url, "--comment", "--comment"], [url, "--comment=false"], [url, "--approve", "--approve"], [url, "--approve=false"],
     [url, "--dry-run", "--dry-run"], [url, "--dry-run=false"], [url, "local/test", "extra"],
-    ["--sticky"], [url, "--sticky="], [url, "--sticky=maybe"], [url, "--sticky", "--sticky=false"],
+    [url, "--sticky="], [url, "--sticky=maybe"], [url, "--sticky", "--sticky=false"],
     [url, "--sticky=true", "--sticky", "false"]]) {
     const { child, done } = f.start(args);
     child.stdin.end();

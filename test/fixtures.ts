@@ -9,7 +9,7 @@ import type { TestContext } from "node:test";
 
 export type Request = { model: string; messages: { role: string; content?: string; tool_calls?: unknown[] }[]; tools: { function: { name: string } }[] };
 const entrypoint = resolve("agent.ts");
-type Launch = { nodeArgs?: string[]; entrypoint?: string };
+type Launch = { nodeArgs?: string[]; entrypoint?: string; env?: NodeJS.ProcessEnv };
 
 // External HTTP endpoints are simulated. The CLI, Pi auth, tools, and SQLite are real.
 export async function fixture(t: TestContext, respond: (body: Request, response: ServerResponse) => void, options: {
@@ -75,6 +75,7 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
           GITHUB_API_URL: `http://127.0.0.1:${address.port}/github`,
           GITHUB_GRAPHQL_URL: `http://127.0.0.1:${address.port}/github/graphql`,
         } : {}),
+        ...launch.env,
       },
     });
     children.push(child);
