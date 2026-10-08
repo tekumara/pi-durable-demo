@@ -145,7 +145,6 @@ for (const status of ["addressed", "uncertain"] as const) {
     assert.match(github.comments[0], commentHeadline);
     assert.ok(github.comments[0].includes(`audited head: \`${sha}\``));
     assert.match(github.comments[0], status === "addressed" ? /1 addressed · 0 outstanding · 0 uncertain/ : /0 addressed · 0 outstanding · 1 uncertain/);
-    assert.match(github.comments[0], /saved snapshot, not the PR's current live state/);
     assert.match(github.comments[0], /Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change\./);
     if (status === "addressed") {
       assert.equal(github.issueComments.length, 1, "repeated posting must update rather than append");
@@ -268,7 +267,6 @@ test("verdict comments keep open findings and next steps visible and collapse re
   assert.match(disclosures[1][2], /evidence fetched: .* to /);
   assert.match(disclosures[1][2], /inline threads: 0\/1 resolved \(0 unknown\)/);
   assert.match(disclosures[1][2], /other findings: 1 not actionable/);
-  assert.match(visible, /Assesses a saved snapshot, not the PR's current live state\./);
   assert.doesNotMatch(body, /Null guard|already fixed|Duplicate request|repeats the access check|\u001b/);
 });
 

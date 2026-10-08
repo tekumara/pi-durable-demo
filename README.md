@@ -134,8 +134,6 @@ This audit checks review findings, not overall PR correctness.
 
 </details>
 
-Assesses a saved snapshot, not the PR's current live state.
-
 <!-- pi-durable-demo:review-audit -->
 ```
 

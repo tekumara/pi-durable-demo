@@ -276,7 +276,7 @@ function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): str
     "Addressed includes code fixes and supported explanations or scope decisions, not necessarily the requested code change.", "",
     "PR-level comments and review summaries have no thread-resolution state.", "",
     "This audit checks review findings, not overall PR correctness.", "", "</details>",
-  ].join("\n"), "Assesses a saved snapshot, not the PR's current live state.", AUDIT_COMMENT_MARKER);
+  ].join("\n"), AUDIT_COMMENT_MARKER);
   return stripControlCharacters(sections.join("\n\n"));
 }
 
