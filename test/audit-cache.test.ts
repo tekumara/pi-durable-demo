@@ -110,6 +110,17 @@ test("unchanged evidence reuses a saved assessment across directories, CLI and c
   const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
   const first = await f.run("", [url]);
   assert.match(first, /Assessment 1/);
+  const session = createSession(await openNodeSqliteStorage(await storagePath(f.stateDir)));
+  const runs = defineDoc<{ latestSuccess: { conversationId: number } | null }>({
+    kind: "app.review-audit-runs", version: 2, scope: "session", initial: () => ({ latestSuccess: null }),
+  });
+  let assessmentId: number;
+  try {
+    const state = await session.snapshot(runs, BACKGROUND_CONTEXT);
+    assert.ok(state?.latestSuccess);
+    assessmentId = state.latestSuccess.conversationId;
+  } finally { await session.close(BACKGROUND_CONTEXT); }
+  const reuseMessage = new RegExp(`Reusing saved assessment ${assessmentId} from`);
   const reads = github.reads();
   github.state.reverse = true;
   const otherCwd = join(f.directory, "other-project");
@@ -117,11 +128,11 @@ test("unchanged evidence reuses a saved assessment across directories, CLI and c
   const second = await f.run("", [url], { cwd: otherCwd });
   assert.equal(calls, 1, "a different working directory, snapshot ID, fetch time or ordering must not trigger reassessment");
   assert.ok(github.reads() > reads, "cache hits must still check GitHub");
-  assert.match(second, /Reusing.*assessment/);
+  assert.match(second, reuseMessage);
   assert.match(second, /Assessment 1/);
   assert.match(second, /Not all actionable findings are addressed/);
   const output = await f.run(`/audit ${url}\n/quit\n`, [], { entrypoint: chat });
-  assert.match(output, /Reusing.*assessment/);
+  assert.match(output, reuseMessage);
   assert.equal(calls, 1);
 });
 

@@ -334,7 +334,7 @@ export async function runAudit(url: string, options: {
               fingerprint, snapshotId: snapshot.id, startedAt: snapshot.startedAt, fetchedAt: snapshot.fetchedAt,
             } });
           }, context);
-          console.log(`[audit] Reusing saved assessment from ${cached.assessedAt}; evidence rechecked ${snapshot.fetchedAt} (unchanged)`);
+          console.log(`[audit] Reusing saved assessment ${cached.conversationId} from ${cached.assessedAt}; evidence rechecked ${snapshot.fetchedAt} (unchanged)`);
           await outputReport(saved.snapshot, saved.report, options);
           return;
         }
