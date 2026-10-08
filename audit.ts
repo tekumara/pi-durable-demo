@@ -8,14 +8,15 @@ async function main() {
     console.log(AUDIT_CLI_USAGE);
     console.log("--force bypasses the assessment cache and restarts any unfinished audit.");
     console.log("--comment posts the verdict to the PR after a complete assessment (default: false).");
+    console.log("--sticky updates the latest verdict comment from your GitHub account (default: true; --sticky=false creates a new comment).");
     console.log("--approve approves the PR only if all actionable findings appear addressed (default: false).");
     console.log("--dry-run previews the comment and approval decision without writing to GitHub (default: false).");
     return;
   }
-  const { url, requested, force, comment, approve, dryRun } = parseAuditOptions(args, "cli");
+  const { url, requested, force, comment, sticky, approve, dryRun } = parseAuditOptions(args, "cli");
   const cwd = process.cwd();
   const { models, model } = await createModelRuntime(cwd, requested);
-  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment, approve, dryRun });
+  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment, sticky, approve, dryRun });
 }
 
 main().catch((error) => {

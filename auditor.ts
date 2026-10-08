@@ -9,7 +9,7 @@ import {
   type Conversation, type ConversationId, type ModelRef,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { approveReview, fetchReviewSnapshot, parseReviewTarget, postReviewComment, readGithubFile, type ReviewSnapshot } from "./reviews.ts";
+import { AUDIT_COMMENT_MARKER, approveReview, fetchReviewSnapshot, parseReviewTarget, postReviewComment, readGithubFile, type ReviewSnapshot } from "./reviews.ts";
 
 const Finding = Type.Object({
   summary: Type.String({ minLength: 1 }),
@@ -229,25 +229,22 @@ function formatComment(snapshot: ReviewSnapshot, assessments: Assessment[]): str
     }
   }
   if (details.length) sections.push("## Outstanding or uncertain findings", ...details);
-  sections.push(snapshotDisclaimer);
+  sections.push(snapshotDisclaimer, AUDIT_COMMENT_MARKER);
   return stripControlCharacters(sections.join("\n\n"));
 }
 
 async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[], options: {
-  comment?: boolean; approve?: boolean; dryRun?: boolean;
+  comment?: boolean; sticky?: boolean; approve?: boolean; dryRun?: boolean;
 }): Promise<void> {
   console.log(`\n${formatReport(snapshot, assessments)}\n`);
   const body = formatComment(snapshot, assessments);
-  if (options.dryRun) {
-    console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
-    console.log(options.comment ? "[audit:dry-run] Comment would be posted."
-      : "[audit:dry-run] Comment would not be posted (--comment not set).");
-  }
+  if (options.dryRun) console.log(`[audit:dry-run] Verdict comment preview:\n\n${body}\n`);
   // Host-only side effects: never expose writes to the model or replay them through Durable.
-  if (options.comment && !options.dryRun) {
-    await postReviewComment(snapshot.target, body);
-    console.log("[audit] Verdict comment posted to the PR");
-  }
+  if (options.comment) {
+    const action = await postReviewComment(snapshot.target, body, options.sticky, options.dryRun);
+    console.log(options.dryRun ? `[audit:dry-run] Comment would be ${action}.`
+      : `[audit] Verdict comment ${action} ${action === "updated" ? "on" : "to"} the PR`);
+  } else if (options.dryRun) console.log("[audit:dry-run] Comment would not be posted (--comment not set).");
   if (options.approve) {
     if (!summarizeFindings(assessments).approvable) {
       console.log(options.dryRun ? "[audit:dry-run] Approval would be skipped: not all actionable findings appear addressed."
@@ -261,7 +258,7 @@ async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[],
 }
 
 export async function runAudit(url: string, options: {
-  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; approve?: boolean; dryRun?: boolean;
+  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; dryRun?: boolean;
 }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);

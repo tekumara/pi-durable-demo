@@ -66,9 +66,9 @@ function github() {
     if (new URL(url).origin !== new URL(base).origin) throw new Error("Unexpected GitHub REST origin");
     return proxyFetch(input, { ...options, signal: AbortSignal.timeout(30_000) });
   };
-  async function request<T>(url: string, body?: object): Promise<T> {
+  async function request<T>(url: string, body?: object, method: "GET" | "POST" | "PATCH" = body ? "POST" : "GET"): Promise<T> {
     const response = await proxyFetch(url, {
-      method: body ? "POST" : "GET",
+      method,
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "pi-durable-auditor",
         ...(body ? { "Content-Type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -163,9 +163,29 @@ export async function fetchReviewSnapshot(target: ReviewTarget): Promise<ReviewS
   };
 }
 
-export async function postReviewComment(target: ReviewTarget, body: string): Promise<void> {
+export const AUDIT_COMMENT_MARKER = "<!-- pi-durable-demo:review-audit -->";
+
+export async function postReviewComment(target: ReviewTarget, body: string, sticky = true, dryRun = false): Promise<"posted" | "updated"> {
   const client = github();
-  await client.request(`${client.base}/repos/${target.owner}/${target.repo}/issues/${target.pr}/comments`, { body });
+  const path = `/repos/${target.owner}/${target.repo}/issues`;
+  let existing: RawComment | undefined;
+  if (sticky) {
+    // Look up live comments, not the saved snapshot: cached/resumed audits must still find the latest post.
+    const [viewer, comments] = await Promise.all([
+      client.request<{ login: string }>(`${client.base}/user`),
+      client.pages<RawComment>(`${path}/${target.pr}/comments?per_page=100`),
+    ]);
+    existing = comments.filter((comment) => comment.user?.login.toLowerCase() === viewer.login.toLowerCase()
+      && (comment.body?.trimEnd().endsWith(AUDIT_COMMENT_MARKER)
+        // Recognise verdicts posted before the marker was introduced.
+        || comment.body?.startsWith(`PR review audit · ${target.url}\n\nHead: `)))
+      .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "") || b.id - a.id)[0];
+  }
+  if (!dryRun) {
+    if (existing) await client.request(`${client.base}${path}/comments/${existing.id}`, { body }, "PATCH");
+    else await client.request(`${client.base}${path}/${target.pr}/comments`, { body });
+  }
+  return existing ? "updated" : "posted";
 }
 
 export async function approveReview(snapshot: ReviewSnapshot, body: string, dryRun = false): Promise<void> {

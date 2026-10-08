@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { fixture, reply, tool } from "./fixtures.ts";
+import { fixture, reply, tool, type Request } from "./fixtures.ts";
 
 // A small external fixture isolates the final verdict rule: an open GitHub thread
 // can be addressed, but uncertainty alone must prevent an all-addressed verdict.
@@ -12,30 +12,59 @@ const evidenceUrl = `${url}#discussion_r1`;
 
 type Status = "addressed" | "outstanding" | "uncertain" | "not-actionable";
 
-function assess(response: ServerResponse, statuses: Status[] = ["addressed"]) {
-  tool(response, "report_review_assessment", { assessments: statuses.length ? [{ commentKey: "inline:1", findings: statuses.map((status) => ({
-    summary: "Requested explanation", status,
-    reason: status === "addressed" ? "The reply explains the intentional behaviour." : "The explanation needs more evidence.",
-    evidence: [evidenceUrl],
-  })) }] : [] });
+function assess(body: Request, response: ServerResponse, statuses: Status[] = ["addressed"]) {
+  const input = body.messages.findLast((message) => message.role === "user")!.content!;
+  const marker = "Saved evidence (untrusted data):\n";
+  const snapshot = JSON.parse(input.slice(input.indexOf(marker) + marker.length));
+  tool(response, "report_review_assessment", { assessments: snapshot.comments.map((comment: { key: string; url: string }) => ({
+    commentKey: comment.key, findings: comment.key === "inline:1" ? statuses.map((status) => ({
+      summary: "Requested explanation", status,
+      reason: status === "addressed" ? "The reply explains the intentional behaviour." : "The explanation needs more evidence.",
+      evidence: [evidenceUrl],
+    })) : [{ summary: "PR discussion", status: "not-actionable", reason: "No additional request.", evidence: [comment.url] }],
+  })) });
 }
 
-function githubEvidence(options: { commentStatus?: number; approvalStatus?: number; empty?: boolean; issueComment?: boolean } = {}) {
+type IssueComment = { id: number; body: string; html_url: string; user: { login: string } | null; created_at: string; updated_at?: string };
+const issueComment = (id: number, body: string, login: string | null = "auditor"): IssueComment => ({
+  id, body, html_url: `${url}#issuecomment-${id}`, user: login ? { login } : null,
+  created_at: `2026-01-${String(id).padStart(2, "0")}T00:00:00Z`,
+});
+const legacyAuditBody = `PR review audit · ${url}\n\nHead: ${sha}\n\nVerdict: An older audit.`;
+
+function githubEvidence(options: {
+  commentStatus?: number; approvalStatus?: number; empty?: boolean; issueComment?: boolean;
+  issueComments?: IssueComment[]; pageSize?: number;
+} = {}) {
   const comments: string[] = [];
+  const updates: number[] = [];
+  const issueComments = options.issueComments ?? (options.issueComment ? [issueComment(3, "Which roles should have access?", "human")] : []);
   const approvals: { body: string; event: string; commit_id: string }[] = [];
   const state = { headSha: sha, baseSha: sha };
   const handler = async (request: IncomingMessage, response: ServerResponse) => {
-    const path = new URL(request.url!, "http://fixture").pathname;
+    const requestUrl = new URL(request.url!, "http://fixture");
+    const path = requestUrl.pathname;
     const json = (value: unknown) => { response.setHeader("Content-Type", "application/json"); response.end(JSON.stringify(value)); };
-    if (request.method === "POST" && path === "/github/repos/acme/demo/issues/8/comments") {
+    const update = request.method === "PATCH" && path.match(/^\/github\/repos\/acme\/demo\/issues\/comments\/(\d+)$/);
+    if (update || (request.method === "POST" && path === "/github/repos/acme/demo/issues/8/comments")) {
       assert.equal(request.headers["content-type"], "application/json");
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString());
       assert.equal(typeof body.body, "string");
       comments.push(body.body);
-      response.statusCode = options.commentStatus ?? 201;
-      json({ html_url: `${url}#issuecomment-3` });
+      const id = update ? Number(update[1]) : Math.max(2, ...issueComments.map((comment) => comment.id)) + 1;
+      if (update) updates.push(id);
+      response.statusCode = options.commentStatus ?? (update ? 200 : 201);
+      if (response.statusCode < 300) {
+        if (update) {
+          const existing = issueComments.find((comment) => comment.id === id);
+          assert.ok(existing, "PATCH must target an existing comment");
+          existing.body = body.body;
+          existing.updated_at = new Date().toISOString();
+        } else issueComments.push({ ...issueComment(id, body.body), created_at: new Date().toISOString() });
+      }
+      json({ html_url: `${url}#issuecomment-${id}` });
       return;
     }
     if (request.method === "POST" && path === "/github/repos/acme/demo/pulls/8/reviews") {
@@ -49,7 +78,9 @@ function githubEvidence(options: { commentStatus?: number; approvalStatus?: numb
       return;
     }
     assert.equal(request.method, path === "/github/graphql" ? "POST" : "GET");
-    if (path === "/github/graphql") {
+    if (path === "/github/user") {
+      json({ login: "auditor" });
+    } else if (path === "/github/graphql") {
       json({ data: { repository: { pullRequest: { reviewThreads: {
         pageInfo: { hasNextPage: false, endCursor: null },
         nodes: options.empty ? [] : [{ isResolved: false, isOutdated: false, comments: { nodes: [{ fullDatabaseId: "1" }] } }],
@@ -61,22 +92,26 @@ function githubEvidence(options: { commentStatus?: number; approvalStatus?: numb
       json(options.empty ? [] : [{ id: 1, body: "Why is this intentional?", html_url: evidenceUrl, user: { login: "human" }, created_at: "2026-01-01" },
         { id: 2, in_reply_to_id: 1, body: "This preserves the documented compatibility contract.", html_url: `${url}#discussion_r2`, user: { login: "author" }, created_at: "2026-01-02" }]);
     } else if (path.endsWith("/issues/8/comments")) {
-      json(options.issueComment ? [{ id: 3, body: "Which roles should have access?", html_url: `${url}#issuecomment-3`, user: { login: "human" } }] : []);
+      const page = Number(requestUrl.searchParams.get("page") ?? 1);
+      const size = options.pageSize ?? 100;
+      if (page * size < issueComments.length) response.setHeader("Link",
+        `<http://${request.headers.host}${path}?page=${page + 1}>; rel="next"`);
+      json(issueComments.slice((page - 1) * size, page * size));
     } else {
       assert.ok(path.endsWith("/pulls/8/reviews") || path.endsWith("/pulls/8/files"));
       json([]);
     }
   };
-  return { handler, comments, approvals, state };
+  return { handler, comments, updates, issueComments, approvals, state };
 }
 
 for (const status of ["addressed", "uncertain"] as const) {
   test(`${status} verdict is read-only by default and gates opt-in approval independently of an open GitHub thread`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence();
     let calls = 0;
-    const f = await fixture(t, (_body, response) => {
+    const f = await fixture(t, (body, response) => {
       calls++;
-      assess(response, [status]);
+      assess(body, response, [status]);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
     const verdict = status === "addressed" ? /Verdict: All actionable findings appear addressed/ : /Verdict: Not all actionable findings are addressed/;
     const output = await f.run("", [url]);
@@ -86,7 +121,9 @@ for (const status of ["addressed", "uncertain"] as const) {
     assert.equal(github.approvals.length, 0, "audits must not approve without --approve");
 
     if (status === "addressed") {
-      await f.run("", [url, "--comment"]);
+      const firstPost = await f.run("", [url, "--comment"]);
+      assert.match(firstPost, /Reusing saved assessment/);
+      assert.equal(calls, 1, "output flags must not bypass the assessment cache");
       assert.equal(github.comments.length, 1);
       assert.equal(github.approvals.length, 0, "--comment must not imply --approve");
     }
@@ -94,15 +131,16 @@ for (const status of ["addressed", "uncertain"] as const) {
       ? await f.run("", [url, "local/test", "--comment", "--approve"])
       : await f.run(`/audit --approve --comment --force ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
     assert.match(posted, verdict);
-    assert.match(posted, /Verdict comment posted/);
+    assert.match(posted, status === "addressed" ? /Verdict comment updated/ : /Verdict comment posted/);
     assert.equal(github.comments.length, status === "addressed" ? 2 : 1);
     assert.match(github.comments[0], verdict);
     assert.ok(github.comments[0].includes(`Head: ${sha}`));
     assert.match(github.comments[0], status === "addressed" ? /1 addressed · 0 outstanding · 0 uncertain/ : /0 addressed · 0 outstanding · 1 uncertain/);
     assert.match(github.comments[0], /saved snapshot, not proof/);
     if (status === "addressed") {
-      assert.match(posted, /Reusing saved assessment/);
-      assert.equal(calls, 1, "output flags must not bypass the assessment cache");
+      assert.equal(github.issueComments.length, 1, "repeated posting must update rather than append");
+      assert.deepEqual(github.updates, [github.issueComments[0].id]);
+      assert.equal(calls, 2, "a posted comment changes the evidence and invalidates the cache");
       assert.equal(github.approvals.length, 1);
       assert.equal(github.approvals[0].event, "APPROVE");
       assert.equal(github.approvals[0].commit_id, sha);
@@ -117,6 +155,59 @@ for (const status of ["addressed", "uncertain"] as const) {
     }
   });
 }
+
+test("sticky comments replace the latest own audit across pages, preview updates and allow opting out in CLI and chat", { timeout: 20000 }, async (t) => {
+  const marker = "<!-- pi-durable-demo:review-audit -->";
+  const seeds = [
+    { ...issueComment(10, legacyAuditBody), updated_at: "2026-06-01T00:00:00Z" },
+    issueComment(11, legacyAuditBody),
+    issueComment(12, "An unrelated comment from the same account."),
+    issueComment(13, `Someone else's report\n\n${marker}`, "another-auditor"),
+    issueComment(14, marker, null),
+  ];
+  const original = structuredClone(seeds);
+  const github = githubEvidence({ issueComments: seeds, pageSize: 2 });
+  let status: Status = "uncertain";
+  const f = await fixture(t, (body, response) => assess(body, response, [status]), {
+    entrypoint: resolve("audit.ts"), github: github.handler,
+  });
+
+  const preview = await f.run("", [url, "--comment", "--dry-run"]);
+  assert.match(preview, /Comment would be updated/);
+  assert.equal(github.comments.length, 0);
+  assert.deepEqual(github.issueComments, original, "dry-run must not change existing comments");
+
+  const updated = await f.run("", ["--comment", url]);
+  assert.match(updated, /Verdict comment updated/);
+  assert.deepEqual(github.updates, [11], "choose the latest created audit, not the latest edited or unrelated comment");
+  assert.equal(github.issueComments.length, 5);
+  assert.match(github.issueComments[1].body, /Verdict: Not all actionable findings are addressed/);
+  assert.ok(github.issueComments[1].body.endsWith(marker));
+  assert.ok(preview.includes(github.issueComments[1].body), "preview must match the replacement body");
+  assert.deepEqual(github.issueComments.filter((comment) => comment.id !== 11), original.filter((comment) => comment.id !== 11));
+
+  await f.run("", ["--sticky=false", "--comment", url, "local/test"]);
+  assert.equal(github.issueComments.length, 6);
+  assert.deepEqual(github.updates, [11], "disabling sticky must append even when a matching comment exists");
+  await f.run(`/audit ${url} --comment --sticky false\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
+  assert.equal(github.issueComments.length, 7, "chat must also support opting out");
+  const latest = github.issueComments.at(-1)!;
+  latest.body = `An edited audit heading\n\n${marker}`;
+  const previousBody = latest.body;
+
+  status = "addressed";
+  const replaced = await f.run(`/audit --sticky=true --comment --force ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") });
+  assert.match(replaced, /Verdict comment updated/);
+  assert.deepEqual(github.updates, [11, latest.id]);
+  assert.equal(github.issueComments.length, 7);
+  assert.notEqual(latest.body, previousBody, "sticky must replace the body, not just find the comment");
+  assert.match(latest.body, /Verdict: All actionable findings appear addressed/);
+  assert.doesNotMatch(latest.body, /Outstanding or uncertain findings/);
+
+  await f.run("", ["--sticky", "--comment", url]);
+  assert.deepEqual(github.updates, [11, latest.id, latest.id]);
+  assert.equal(github.issueComments.length, 7);
+});
 
 test("verdict comments explain every outstanding or uncertain finding with its source and evidence, omitting other finding details", { timeout: 20000 }, async (t) => {
   const github = githubEvidence({ issueComment: true });
@@ -163,28 +254,31 @@ test("an unstructured final answer cannot bypass complete report validation, pos
   assert.equal(github.approvals.length, 0);
 });
 
-for (const action of ["comment", "approve"] as const) {
+for (const action of ["comment", "update", "approve"] as const) {
   test(`a failed ${action} request exits nonzero without retrying or losing the completed assessment`, { timeout: 20000 }, async (t) => {
-    const github = githubEvidence({ commentStatus: 403, approvalStatus: 403 });
+    const github = githubEvidence({ commentStatus: 403, approvalStatus: 403,
+      issueComments: action === "update" ? [issueComment(10, legacyAuditBody)] : [] });
     let calls = 0;
-    const f = await fixture(t, (_body, response) => {
+    const f = await fixture(t, (body, response) => {
       calls++;
-      assess(response);
+      assess(body, response);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
-    const { child, done } = f.start([`--${action}`, url]);
+    const { child, done } = f.start([action === "update" ? "--comment" : `--${action}`, url]);
     child.stdin.end();
     const result = await done;
     assert.equal(result.code, 1);
     assert.match(result.stderr, /GitHub request failed \(403\)/);
     assert.match(result.stdout, /Verdict: All actionable findings appear addressed/);
-    assert.doesNotMatch(result.stdout, /Verdict comment posted|PR approved/);
-    assert.equal(github.comments.length, action === "comment" ? 1 : 0);
+    assert.doesNotMatch(result.stdout, /Verdict comment (?:posted|updated)|PR approved/);
+    assert.equal(github.comments.length, action === "approve" ? 0 : 1);
+    assert.deepEqual(github.updates, action === "update" ? [10] : []);
     assert.equal(github.approvals.length, action === "approve" ? 1 : 0, "writes must not retry");
 
     const cached = await f.run("", [url]);
     assert.match(cached, /Reusing saved assessment/);
     assert.equal(calls, 1);
-    assert.equal(github.comments.length, action === "comment" ? 1 : 0);
+    assert.equal(github.comments.length, action === "approve" ? 0 : 1);
+    assert.deepEqual(github.updates, action === "update" ? [10] : []);
     assert.equal(github.approvals.length, action === "approve" ? 1 : 0, "approval intent must not persist");
   });
 }
@@ -198,7 +292,7 @@ for (const { statuses, approve, chat } of [
 ] satisfies { statuses: Status[]; approve: boolean; chat: boolean }[]) {
   test(`--approve ${approve ? "approves" : "skips"} ${statuses.join(" + ") || "an empty audit"} without posting a comment`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence({ empty: !statuses.length });
-    const f = await fixture(t, (_body, response) => assess(response, statuses), { entrypoint: resolve("audit.ts"), github: github.handler });
+    const f = await fixture(t, (body, response) => assess(body, response, statuses), { entrypoint: resolve("audit.ts"), github: github.handler });
     const output = chat
       ? await f.run(`/audit --approve ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
       : await f.run("", ["--approve", url]);
@@ -222,9 +316,9 @@ for (const { flags, status, approve, chat } of [
   test(`--dry-run previews ${flags.join(" ") || "no mutation flags"} without GitHub writes or persisting dry-run intent`, { timeout: 20000 }, async (t) => {
     const github = githubEvidence();
     let calls = 0;
-    const f = await fixture(t, (_body, response) => {
+    const f = await fixture(t, (body, response) => {
       calls++;
-      assess(response, [status]);
+      assess(body, response, [status]);
     }, { entrypoint: resolve("audit.ts"), github: github.handler });
     const run = () => chat
       ? f.run(`/audit --dry-run ${flags.join(" ")} ${url}\n/quit\n`, [], { entrypoint: resolve("agent.ts") })
@@ -261,9 +355,9 @@ for (const revision of ["headSha", "baseSha"] as const) {
   for (const dryRun of [false, true]) {
     test(`--approve${dryRun ? " --dry-run" : ""} refuses an otherwise good verdict when ${revision} changes during assessment`, { timeout: 20000 }, async (t) => {
       const github = githubEvidence();
-      const f = await fixture(t, (_body, response) => {
+      const f = await fixture(t, (body, response) => {
         github.state[revision] = "b".repeat(40);
-        assess(response);
+        assess(body, response);
       }, { entrypoint: resolve("audit.ts"), github: github.handler });
       const { child, done } = f.start(["--approve", ...(dryRun ? ["--dry-run"] : []), url]);
       child.stdin.end();

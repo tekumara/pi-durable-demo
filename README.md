@@ -91,11 +91,21 @@ This is the agent's assessment of a saved snapshot, not proof of correctness or 
 
 The comment includes details only for `outstanding` and `uncertain` findings. If there are none, it contains the summary only. The terminal report retains explanations and evidence for all findings.
 
-The flag defaults to false. It can appear before or after the URL or CLI model argument, and you can combine it with `--force`. Your GitHub token needs permission to create PR comments.
+`--comment` defaults to false. It can appear before or after the URL or CLI model argument, and you can combine it with `--force`. Your GitHub token needs permission to create and edit PR comments.
 
-The host posts only after a complete, validated assessment, including a cache hit. The model remains read-only. Each successful invocation with `--comment` creates a new comment; posting changes the PR discussion and therefore invalidates the evidence cache on the next audit.
+Comments are sticky by default (`--sticky=true`). Each invocation updates the latest audit comment posted by your authenticated GitHub account, or creates one if none exists. Other accounts' comments and your unrelated comments are left unchanged. New audit comments include a hidden marker; older verdict comments are recognised by their audit heading.
 
-Posting is not replayed by Durable, and the flag does not persist across invocations. If posting fails, the CLI exits 1 but retains the completed assessment. After an interruption or ambiguous network failure, check the PR before retrying to avoid duplicate comments.
+To create a new comment every time, set `--sticky=false`:
+
+```sh
+npm run audit -- --comment --sticky=false https://github.com/owner/repo/pull/42
+```
+
+You can also write `--sticky false`. A bare `--sticky`, `--sticky true` or `--sticky=true` enables sticky updates. The flag does not imply `--comment` or change approval behaviour. If several audit comments already exist, only the latest created one is updated; older comments remain.
+
+The host posts or updates only after a complete, validated assessment, including a cache hit. It looks up live comments even when the assessment uses a saved snapshot. The model remains read-only. Creating or changing a comment changes the PR discussion and invalidates the evidence cache on the next audit.
+
+GitHub writes are not replayed by Durable, and the flags do not persist across invocations. If a write fails, the CLI exits 1 but retains the completed assessment. A failed update does not fall back to creating a new comment. After an interruption or ambiguous network failure, check the PR before retrying. Concurrent first-time posts can still create duplicates.
 
 ### Approve when findings are addressed
 
@@ -127,7 +137,7 @@ Add `--dry-run` to show the exact comment body without writing to GitHub. Combin
 npm run audit -- --dry-run --comment --approve https://github.com/owner/repo/pull/42
 ```
 
-The normal report is followed by a labelled comment preview and the planned actions. For an addressed verdict, the action preview looks like this:
+The normal report is followed by a labelled comment preview and the planned actions. With sticky comments enabled, the preview looks up the latest matching audit comment and reports whether it would be updated or created. For an addressed verdict with no existing audit comment, the action preview looks like this:
 
 ```text
 [audit:dry-run] Comment would be posted.
@@ -232,7 +242,7 @@ You can invoke the same PR auditor from chat:
 /audit https://github.com/owner/repo/pull/42
 ```
 
-The command supports the same `--force`, `--comment`, `--approve`, and `--dry-run` flags described above. Chat audits use the chat's model and separate audit storage. They do not replace the coding conversation or its tools.
+The command supports the same `--force`, `--comment`, `--sticky`, `--approve`, and `--dry-run` flags described above. Chat audits use the chat's model and separate audit storage. They do not replace the coding conversation or its tools.
 
 To use the coding chat in another project, run the script from that directory:
 
@@ -264,7 +274,7 @@ npm run check
 npm test
 ```
 
-The tests use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
+The tests use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, dry-run previews without GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 
