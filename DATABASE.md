@@ -1,6 +1,8 @@
 # Database data model
 
-Both `.pi-durable/agent.sqlite` and `.pi-durable/audits/<target-hash>.sqlite` use this schema. Each database is one Durable session.
+Both `chats/<cwd-hash>.sqlite` and `audits/<target-hash>.sqlite` under Pronto's state directory use this schema. Each database is one Durable session.
+
+The default state directory is `~/.local/state/pronto`. `PRONTO_STATE_DIR` overrides it; otherwise an absolute `XDG_STATE_HOME` selects `$XDG_STATE_HOME/pronto`. See [Credentials and audit storage](README.md#credentials-and-audit-storage) for path selection and locking. The adjacent `.lock` files hold ownership locks, not conversation data.
 
 ## What each table is for
 
@@ -220,7 +222,7 @@ The audit document definitions are in [`auditor.ts`](auditor.ts).
 
 ## Audit database contents
 
-Each PR has one database at `.pi-durable/audits/<target-hash>.sqlite`, shared by the CLI and chat command. It can contain several audit conversations. The coding conversation remains separate in `.pi-durable/agent.sqlite`.
+Each PR has one database at `<state-directory>/audits/<target-hash>.sqlite`, shared by the CLI and chat command across working directories. It can contain several audit conversations. The coding conversation remains separate in `<state-directory>/chats/<cwd-hash>.sqlite`.
 
 Each newly admitted audit attempt creates an independent conversation. Its evidence and identity are saved together, before submitting work to the model.
 
@@ -253,7 +255,8 @@ In SQLite, `conversations` identifies attempts, `entries` holds transcript and r
 For read-only inspection with Node's built-in SQLite, replace `<target-hash>` with the hash in the database filename:
 
 ```sh
-DB=".pi-durable/audits/<target-hash>.sqlite" node --input-type=module <<'JS'
+STATE_DIR="${PRONTO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pronto}"
+DB="$STATE_DIR/audits/<target-hash>.sqlite" node --input-type=module <<'JS'
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync(process.env.DB, { readOnly: true });
 try {

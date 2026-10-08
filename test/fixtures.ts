@@ -9,7 +9,7 @@ import type { TestContext } from "node:test";
 
 export type Request = { model: string; messages: { role: string; content?: string; tool_calls?: unknown[] }[]; tools: { function: { name: string } }[] };
 const entrypoint = resolve("agent.ts");
-type Launch = { nodeArgs?: string[]; entrypoint?: string; env?: NodeJS.ProcessEnv };
+type Launch = { nodeArgs?: string[]; entrypoint?: string; env?: NodeJS.ProcessEnv; cwd?: string };
 
 // External HTTP endpoints are simulated. The CLI, Pi auth, tools, and SQLite are real.
 export async function fixture(t: TestContext, respond: (body: Request, response: ServerResponse) => void, options: {
@@ -18,6 +18,7 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "pi-durable-test-"));
   const agentDir = join(directory, "pi");
+  const stateDir = join(directory, "state");
   const cwd = join(directory, "project");
   await mkdir(agentDir);
   await mkdir(cwd);
@@ -68,8 +69,8 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
 
   const start = (args: string[] = [], launch: Launch = {}) => {
     const child = spawn(process.execPath, [...(launch.nodeArgs ?? []), "--experimental-strip-types", launch.entrypoint ?? options.entrypoint ?? entrypoint, ...args], {
-      cwd,
-      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1",
+      cwd: launch.cwd ?? cwd,
+      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PRONTO_STATE_DIR: stateDir,
         ...(options.github ? {
           GITHUB_TOKEN: "github-key", GH_TOKEN: "", HTTPS_PROXY: "", https_proxy: "",
           GITHUB_API_URL: `http://127.0.0.1:${address.port}/github`,
@@ -93,7 +94,7 @@ export async function fixture(t: TestContext, respond: (body: Request, response:
     assert.equal(result.code, 0, result.stderr);
     return result.stdout;
   };
-  return { cwd, agentDir, start, run };
+  return { directory, cwd, agentDir, stateDir, start, run };
 }
 
 export function reply(response: ServerResponse, deltas: object[], finish = "stop") {

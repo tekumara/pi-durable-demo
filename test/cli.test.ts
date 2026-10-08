@@ -106,6 +106,6 @@ for (const { name, args, gh, message } of [
     const result = await done;
     assert.equal(result.code, 1);
     assert.match(result.stderr, message);
-    await assert.rejects(readdir(join(f.cwd, ".pi-durable")), { code: "ENOENT" });
+    await assert.rejects(readdir(f.stateDir), { code: "ENOENT" });
   });
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -89,6 +89,14 @@ for (const signal of ["SIGKILL", "SIGTERM"] as const) {
     const first = f.start();
     first.child.stdin.write("keep working\n");
     await started.promise;
+    if (signal === "SIGKILL") {
+      const competing = f.start();
+      competing.child.stdin.end("/quit\n");
+      const rejected = await competing.done;
+      assert.equal(rejected.code, 1, rejected.stderr);
+      assert.match(rejected.stderr, /Database is already in use/);
+      assert.equal(requests, 1, "a competing chat must not resume the pending turn");
+    }
     first.child.kill(signal);
     const stopped = await first.done;
     if (signal === "SIGTERM") assert.equal(stopped.code, 0, stopped.stderr);
@@ -97,3 +105,23 @@ for (const signal of ["SIGKILL", "SIGTERM"] as const) {
     assert.equal(requests, 2);
   });
 }
+
+test("directory-local chat databases are ignored and left untouched", { timeout: 20000 }, async (t) => {
+  const prompts: (string | undefined)[][] = [];
+  const f = await fixture(t, (body, response) => {
+    prompts.push(body.messages.filter((message) => message.role === "user").map((message) => message.content));
+    reply(response, [{ role: "assistant", content: "Done." }]);
+  });
+  await f.run("old conversation\n/quit\n");
+  const directory = join(f.stateDir, "chats");
+  const databases = (await readdir(directory)).filter((file) => file.endsWith(".sqlite"));
+  assert.equal(databases.length, 1);
+  const legacyDirectory = join(f.cwd, ".pi-durable");
+  await mkdir(legacyDirectory);
+  const legacy = join(legacyDirectory, "agent.sqlite");
+  await rename(join(directory, databases[0]!), legacy);
+  const original = await readFile(legacy);
+  await f.run("new conversation\n/quit\n");
+  assert.deepEqual(prompts, [["old conversation"], ["new conversation"]], "the chat must start fresh, not import directory-local history");
+  assert.deepEqual(await readFile(legacy), original);
+});

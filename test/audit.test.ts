@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -145,7 +145,8 @@ test("CLI audit assesses all discussion using remote pinned code, rejects unsafe
   assert.match(output, /inline:102 · human · GitHub: open, outdated[\s\S]*addressed: Null check/);
   assert.equal(turn, 5);
   await assert.rejects(readFile(join(f.cwd, "audit-should-not-write")), { code: "ENOENT" });
-  const files = await readdir(join(f.cwd, ".pi-durable", "audits"));
+  const files = await readdir(join(f.stateDir, "audits"));
+  await assert.rejects(readdir(join(f.cwd, ".pi-durable")), { code: "ENOENT" });
   assert.equal(files.filter((file) => file.endsWith(".sqlite")).length, 1);
   assert.ok(files.every((file) => !/\.(json|md)$/.test(file)), "no separate report file");
   assert.ok(github.requests.some((path) => path.includes("comments?page=2")));
@@ -234,6 +235,14 @@ test("restart resumes the saved audit snapshot without refetching or resubmittin
   const first = f.start([prUrl]);
   first.child.stdin.end();
   await started.promise;
+  const otherCwd = join(f.directory, "other-project");
+  await mkdir(otherCwd);
+  const competing = f.start([prUrl], { cwd: otherCwd });
+  competing.child.stdin.end();
+  const rejected = await competing.done;
+  assert.equal(rejected.code, 1, rejected.stderr);
+  assert.match(rejected.stderr, /Database is already in use/);
+  assert.deepEqual(github.requests, snapshotRequests!, "a competing audit must fail before refetching evidence");
   first.child.kill("SIGKILL");
   await first.done;
   const output = await f.run("", [prUrl]);

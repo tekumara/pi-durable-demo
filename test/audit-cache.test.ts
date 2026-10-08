@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, defineDoc, type JsonObject } from "@earendil-works/pi-durable";
@@ -97,14 +97,14 @@ async function setMaxTokens(agentDir: string, maxTokens: number) {
   await writeFile(path, JSON.stringify(config));
 }
 
-async function storagePath(cwd: string) {
-  const directory = join(cwd, ".pi-durable", "audits");
+async function storagePath(stateDir: string) {
+  const directory = join(stateDir, "audits");
   const files = (await readdir(directory)).filter((name) => name.endsWith(".sqlite"));
   assert.equal(files.length, 1);
   return join(directory, files[0]);
 }
 
-test("unchanged evidence reuses a saved assessment across CLI and chat, ignoring fetch times and collection order", { timeout: 20_000 }, async (t) => {
+test("unchanged evidence reuses a saved assessment across directories, CLI and chat, ignoring fetch times and collection order", { timeout: 20_000 }, async (t) => {
   const github = evidence();
   let calls = 0;
   const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
@@ -112,8 +112,10 @@ test("unchanged evidence reuses a saved assessment across CLI and chat, ignoring
   assert.match(first, /Assessment 1/);
   const reads = github.reads();
   github.state.reverse = true;
-  const second = await f.run("", [url]);
-  assert.equal(calls, 1, "a new snapshot ID, fetch time or ordering must not trigger reassessment");
+  const otherCwd = join(f.directory, "other-project");
+  await mkdir(otherCwd);
+  const second = await f.run("", [url], { cwd: otherCwd });
+  assert.equal(calls, 1, "a different working directory, snapshot ID, fetch time or ordering must not trigger reassessment");
   assert.ok(github.reads() > reads, "cache hits must still check GitHub");
   assert.match(second, /Reusing.*assessment/);
   assert.match(second, /Assessment 1/);
@@ -243,7 +245,7 @@ test("invalid audit flags are rejected before audit storage or network access in
   assert.match(result.stderr, /--sticky can be supplied only once/);
   assert.match(result.stderr, /--sticky must be true or false/);
   assert.equal(github.reads(), 0);
-  await assert.rejects(readdir(join(f.cwd, ".pi-durable", "audits")), { code: "ENOENT" });
+  await assert.rejects(readdir(join(f.stateDir, "audits")), { code: "ENOENT" });
 });
 
 test("matching cached assessments do not expire", { timeout: 20_000 }, async (t) => {
@@ -251,7 +253,7 @@ test("matching cached assessments do not expire", { timeout: 20_000 }, async (t)
   let calls = 0;
   const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
   await f.run("", [url]);
-  const session = createSession(await openNodeSqliteStorage(await storagePath(f.cwd)));
+  const session = createSession(await openNodeSqliteStorage(await storagePath(f.stateDir)));
   // Exercise the persisted v2 state protocol with an assessment that has aged since it was saved.
   const runs = defineDoc<JsonObject>({ kind: "app.review-audit-runs", version: 2, scope: "session", initial: () => ({}) });
   try {
@@ -382,13 +384,35 @@ process.stdout.write = function(chunk, ...args) {
   assert.equal(calls, 1);
 });
 
+test("directory-local audit databases are ignored and left untouched", { timeout: 20_000 }, async (t) => {
+  const github = evidence();
+  let calls = 0;
+  const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
+  await f.run("", [url]);
+  const path = await storagePath(f.stateDir);
+  const legacyDirectory = join(f.cwd, ".pi-durable", "audits");
+  await mkdir(legacyDirectory, { recursive: true });
+  const legacy = join(legacyDirectory, basename(path));
+  await rename(path, legacy);
+  const original = await readFile(legacy);
+  const fresh = await f.run("", [url]);
+  assert.doesNotMatch(fresh, /Reusing.*assessment/);
+  assert.match(fresh, /Assessment 2/);
+  assert.equal(calls, 2, "a directory-local cached assessment must not be imported");
+  const cached = await f.run("", [url]);
+  assert.match(cached, /Reusing.*assessment/);
+  assert.match(cached, /Assessment 2/);
+  assert.equal(calls, 2, "new assessments must persist in the configured state directory");
+  assert.deepEqual(await readFile(legacy), original);
+});
+
 test("existing v1 controller state migrates without being mistaken for a cached assessment", { timeout: 20_000 }, async (t) => {
   const github = evidence();
   let calls = 0;
   const f = await fixture(t, (body, response) => assess(body, response, ++calls), { entrypoint: audit, github: github.handler });
-  const directory = join(f.cwd, ".pi-durable", "audits");
+  const directory = join(f.stateDir, "audits");
   await mkdir(directory, { recursive: true });
-  // The v1 per-PR storage identity and document shape are an independent compatibility contract.
+  // The v1 per-PR key and controller document shape are independent compatibility contracts.
   const key = createHash("sha256").update("https://github.com/acme/project#9").digest("hex").slice(0, 20);
   const session = createSession(await openNodeSqliteStorage(join(directory, `${key}.sqlite`)));
   const legacy = defineDoc<JsonObject>({ kind: "app.review-audit-runs", version: 1, scope: "session", initial: () => ({ active: null, complete: true }) });

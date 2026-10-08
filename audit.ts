@@ -19,7 +19,7 @@ async function main() {
   const cwd = process.cwd();
   const url = await resolveAuditUrl(selector, cwd);
   const { models, model } = await createModelRuntime(cwd, requested);
-  await runAudit(url, { cwd, models, model: { provider: model.provider, modelId: model.id }, force, comment, sticky, approve, apply });
+  await runAudit(url, { models, model: { provider: model.provider, modelId: model.id }, force, comment, sticky, approve, apply });
 }
 
 main().catch((error) => {

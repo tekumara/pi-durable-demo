@@ -20,7 +20,7 @@ npm link --ignore-scripts
 pronto https://github.com/owner/repo/pull/42
 ```
 
-Run `npm link --ignore-scripts` from this repository to install the global `pronto` command as a symlink to the source. Changes here take effect immediately, with no build or reinstall. You can run `pronto` from any directory; audit storage stays in the directory where you invoke it. Run `npm unlink --global pronto` to remove the link.
+Run `npm link --ignore-scripts` from this repository to install the global `pronto` command as a symlink to the source. Changes here take effect immediately, with no build or reinstall. You can run `pronto` from any directory. Audits share history and cached assessments through your [user state directory](#credentials-and-audit-storage). Run `npm unlink --global pronto` to remove the link.
 
 From a Git checkout, omit the target to audit the current branch's PR. You can also select a PR by branch name or number:
 
@@ -227,9 +227,9 @@ Use `--force` after a temporary evidence-access failure, when revisiting a time-
 
 Cache pointers, fingerprints and recheck receipts live in Durable storage. Completion and cache publication share one transaction. If the process dies before printing a completed report, the next invocation can reuse it after checking the evidence. Terminal output is not exactly-once delivery.
 
-Existing sessions migrate without deleting their history. Assessments created before caching are not automatically eligible for reuse. If an unfinished audit resumes under a changed assessment policy, it can finish but cannot publish a mixed-policy cache entry. A successful but uncacheable assessment clears the cache slot rather than falling back to an older success. When changing tool behaviour, validation rules or dependency defaults, bump `AUDITOR_VERSION` in `auditor.ts`. Prompt and tool-schema changes invalidate the cache automatically.
+Existing controller documents migrate without deleting their history. Assessments created before caching are not automatically eligible for reuse. If an unfinished audit resumes under a changed assessment policy, it can finish but cannot publish a mixed-policy cache entry. A successful but uncacheable assessment clears the cache slot rather than falling back to an older success. When changing tool behaviour, validation rules or dependency defaults, bump `AUDITOR_VERSION` in `auditor.ts`. Prompt and tool-schema changes invalidate the cache automatically.
 
-Run only one audit per PR per directory at a time; Durable does not lock storage across processes.
+Pronto rejects concurrent audits of the same PR in the same state directory, even when launched from different working directories.
 
 The one-shot CLI exits 0 when it produces a complete report, even if findings remain outstanding. Operational failures or an incomplete assessment exit 1. The report is not a CI pass/fail signal.
 
@@ -239,11 +239,41 @@ The auditor reuses Pi's `ModelRuntime` for credentials, OAuth refresh, and custo
 
 `agent-reviews` 1.1.0 is a pinned npm dependency, imported directly; its CLI is not launched. Its authentication and proxy helpers may invoke `gh` or `curl`. `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` support enterprise and API-compatible endpoints.
 
-No separate JSON or Markdown report file is written. Each PR has a SQLite session under `.pi-durable/audits/`. The evidence is saved both in a Durable document and as a submitted conversation input; remote file reads become tool results. The structured assessment is also retained in the session.
+Pronto stores databases outside your working directory. It chooses the state directory in this order:
 
-Private review text and code are sent to your selected model provider and saved locally. Protect `.pi-durable/` and keep it out of version control. SQLite's defaults protect against process crashes, but the newest commits can be lost on power failure.
+1. `PRONTO_STATE_DIR`, if set to a non-empty absolute path.
+2. `$XDG_STATE_HOME/pronto`, if `XDG_STATE_HOME` is a non-empty absolute path.
+3. `~/.local/state/pronto`.
+
+An empty override uses the next option. A relative `PRONTO_STATE_DIR` is rejected; a relative `XDG_STATE_HOME` is ignored. Pi credentials stay in their existing location.
+
+For a custom installation or isolated test run, set:
+
+```sh
+export PRONTO_STATE_DIR="$HOME/pronto-state"
+```
+
+The state directory contains:
+
+```text
+pronto/
+├── audits/
+│   └── <target-hash>.sqlite
+└── chats/
+    └── <cwd-hash>.sqlite
+```
+
+Each PR has one audit database, shared across working directories and both entry points. Its key includes the GitHub origin, owner, repository and PR number. Chat databases are separate, keyed by the canonical absolute working directory. Symlink aliases share a chat; different worktrees do not. Both filenames use the first 20 hexadecimal characters of a SHA-256 hash.
+
+No separate JSON or Markdown report file is written. Evidence is saved in a Durable document and as a submitted conversation input. Remote file reads become tool results. The structured assessment is also retained in the session.
+
+Each database has a separate `<filename>.lock` file. Pronto holds an exclusive SQLite lock there until the harness closes. The operating system releases ownership after a crash, so restarts need no stale-lock cleanup. Lock files remain on disk; do not delete them while Pronto is running. Different databases can be used concurrently.
+
+Private review text and code are sent to your selected model provider and saved locally. New state directories use permissions `0700`; new database files use `0600`. Keep the state directory private and out of version control. SQLite protects against process crashes, but the newest commits can be lost on power failure.
 
 See [Audit database contents](DATABASE.md#audit-database-contents) for the saved evidence, reports, execution state and read-only inspection commands.
+
+Pronto ignores existing directory-local `.pi-durable/` databases and leaves them untouched. Only the configured state directory supplies history and recovery state. If no database exists there, Pronto starts a new session. Keep any old `.pi-durable/` directory out of version control.
 
 ## Optional interactive chat
 
@@ -286,13 +316,13 @@ The chat uses the same Pi credential setup as the auditor. Pi extensions, skills
 
 ### Chat persistence and recovery
 
-The coding chat has one conversation per working directory in `.pi-durable/agent.sqlite`. Restart the same command to continue it. Conversation history and the selected model survive restarts.
+The coding chat has one conversation per canonical working directory in `<state-directory>/chats/<cwd-hash>.sqlite`. Restart the same command to continue it. Conversation history and the selected model survive restarts.
 
 Ctrl+C or SIGTERM closes the harness without cancelling its unfinished work. On the next launch, `harness.resume()` continues it before accepting another task. An interrupted model request is retried. Interrupted tools rerun only when Pi Durable declares them replay-safe; writes and shell commands are not blindly repeated.
 
-Run only one chat process per working directory. Pi Durable does not provide cross-process storage locking.
+Pronto rejects a second chat process for the same working directory and state directory. Audits use separate databases, so they do not lock the coding conversation.
 
-To start a fresh conversation, stop the chat and move or delete `.pi-durable/agent.sqlite` and its SQLite sidecar files. Keep `.pi-durable/audits/` if you want to retain saved audits. The chat database contains your prompts, model responses, and tool results, so keep it private.
+To start a fresh conversation, stop the chat and move or delete its `<cwd-hash>.sqlite` file and SQLite sidecars (`-wal` and `-shm`). Keep the state directory's `audits/` subdirectory to retain saved audits. The chat database contains your prompts, model responses and tool results, so keep it private.
 
 ## Development checks
 
@@ -301,7 +331,7 @@ npm run check
 npm test
 ```
 
-The tests verify that `npm link` exposes the source-backed `pronto` command from another directory. They use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, default dry-run previews and per-invocation `--apply` consent for GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and stored-state migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. The tests do not contact a real model provider or GitHub.
+The tests verify that `npm link` exposes the source-backed `pronto` command from another directory. They use local simulated model and GitHub endpoints with temporary credentials. Audit tests cover both entry points, paginated evidence, fork-head code reads, blocked shell calls, report coverage and citations, inconsistent evidence, and restart recovery. They also cover opt-in verdict comments and approvals, sticky updates and opting out, default dry-run previews and per-invocation `--apply` consent for GitHub writes, skipped approvals, commit changes before approval, posting failures, cache reuse and invalidation, no expiry, failed reassessment, forced restarts, crashes during fetching and before printing, and controller-schema migration. Chat tests exercise all 4 coding tools, streamed output, saved history, and recovery after SIGKILL and SIGTERM. Storage tests cover path precedence, private permissions, shared audit history, isolated chats, process locks and ignoring directory-local databases. Tests use temporary state directories and do not contact a real model provider or GitHub.
 
 Pi Durable is experimental. Dependencies are pinned to 1.0.3, with `package-lock.json` included alongside the code.
 

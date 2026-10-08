@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
-  createRegistry, defineDoc, defineExtension, defineTool, Harness, watchEvents,
+  createRegistry, defineDoc, defineExtension, defineTool, watchEvents,
   type Conversation, type ConversationId, type ModelRef,
 } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { openStateHarness } from "./state.ts";
 import { AUDIT_COMMENT_MARKER, approveReview, fetchReviewSnapshot, parseReviewTarget, postReviewComment, readGithubFile, type ReviewSnapshot } from "./reviews.ts";
 
 const Finding = Type.Object({
@@ -259,16 +257,14 @@ async function outputReport(snapshot: ReviewSnapshot, assessments: Assessment[],
 }
 
 export async function runAudit(url: string, options: {
-  cwd: string; models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
+  models: ModelRuntime; model: ModelRef; force?: boolean; comment?: boolean; sticky?: boolean; approve?: boolean; apply?: boolean;
 }): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   const target = parseReviewTarget(url);
   const key = createHash("sha256").update(`${new URL(target.url).origin}/${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.pr}`).digest("hex").slice(0, 20);
-  const directory = join(options.cwd, ".pi-durable", "audits");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
   const registry = createRegistry();
   registry.install(Auditor);
-  const harness = await Harness.open(await openNodeSqliteStorage(join(directory, `${key}.sqlite`)), {
+  const harness = await openStateHarness({ kind: "audit", key }, {
     models: options.models, registry, settings: auditSettings, onReport: (error) => console.error(error),
     // No execution environment and no coding tools: model calls cannot touch local files or mutate GitHub.
   }, context);

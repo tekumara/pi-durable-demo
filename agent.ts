@@ -1,14 +1,12 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { runAudit } from "./auditor.ts";
 import { parseAuditOptions } from "./audit-options.ts";
 import { createModelRuntime } from "./model.ts";
-import { createRegistry, Harness, watchEvents } from "@earendil-works/pi-durable";
+import { openStateHarness } from "./state.ts";
+import { createRegistry, watchEvents } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 async function main() {
@@ -17,12 +15,10 @@ async function main() {
   // Reuse Pi's credential store, OAuth refresh, and custom model configuration.
   const { models, model, available } = await createModelRuntime(cwd, process.argv[2]);
 
-  const directory = join(cwd, ".pi-durable");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
   const registry = createRegistry();
   registry.install(CodingTools);
   const env = new NodeExecutionEnv({ cwd });
-  const harness = await Harness.open(await openNodeSqliteStorage(join(directory, "agent.sqlite")), {
+  const harness = await openStateHarness({ kind: "chat", cwd }, {
     models,
     registry,
     env: () => env,
@@ -110,7 +106,7 @@ async function main() {
       if (/^\/audit(?:\s|$)/.test(content)) {
         try {
           const { selector: url, force, comment, sticky, approve, apply } = parseAuditOptions(content.slice("/audit".length).trim().split(/\s+/).filter(Boolean), "chat");
-          await runAudit(url, { cwd, models, model: agent.model!, force, comment, sticky, approve, apply });
+          await runAudit(url, { models, model: agent.model!, force, comment, sticky, approve, apply });
         } catch (error) {
           console.error(error instanceof Error ? error.message : error);
         }
